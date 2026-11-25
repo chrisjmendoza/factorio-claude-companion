@@ -5,6 +5,7 @@ Date: 2026-11-24
     - Blueprint paste: Claude uploads a blueprint string in parts and the game's own build_blueprint places it as ghosts, keeping recipes, filters and circuit settings.
     - Task board: a checklist panel Claude fills, with items that tick themselves off (research, items carried, buildings built, ghosts finished, amounts made) and a button that points you to the spot.
     - Power readout per electric network (production, consumption, capacity, boilers out of fuel) and a telemetry log written every game minute to script-output.
+    - Claude has its own character: a gold "Claude" that walks by pathfinding and works through a job queue (take from or put into chests, build ghosts from what it carries, refuel burners, craft), reporting each job back. No cheats: it only uses items it carries.
     - Claude can queue hand-crafting for your character, change a machine's recipe, order upgrades (e.g. assembler 1 to 2), set chest limits, and plant trees from your saplings.
   Changes:
     - Claude's chat text is a brighter gold.
