@@ -632,6 +632,39 @@ function handlers.deconstruct(args)
 	return { marked = n }
 end
 
+-- Marks only the trees and rocks that overlap a ghost's footprint in the area,
+-- so planned builds get cleared without felling the rest of the forest.
+function handlers.clear_under_ghosts(args)
+	local surface, force = surface_of(args), force_of(args)
+	local area = area_of(args, 50, 1000)
+	local seen, n = {}, 0
+	for _, g in pairs(surface.find_entities_filtered { area = area, type = "entity-ghost", force = force }) do
+		for _, e in pairs(surface.find_entities_filtered { area = g.bounding_box, type = { "tree", "simple-entity" } }) do
+			if not seen[e.unit_number or e] and not e.to_be_deconstructed() then
+				seen[e.unit_number or e] = true
+				if e.order_deconstruction(force) then n = n + 1 end
+			end
+		end
+	end
+	return { marked = n }
+end
+
+-- Cancels deconstruction orders in an area (trees and rocks by default).
+function handlers.cancel_deconstruct(args)
+	local surface, force = surface_of(args), force_of(args)
+	local area = area_of(args, 10, 1000)
+	local filter = { area = area }
+	if args.names then filter.name = args.names else filter.type = { "tree", "simple-entity" } end
+	local n = 0
+	for _, e in pairs(surface.find_entities_filtered(filter)) do
+		if e.to_be_deconstructed() then
+			e.cancel_deconstruction(force)
+			n = n + 1
+		end
+	end
+	return { cancelled = n }
+end
+
 -- Outstanding ghosts, the items they need, and what the player is short of.
 function handlers.ghosts(args)
 	local surface, force = surface_of(args), force_of(args)
@@ -1048,8 +1081,10 @@ function handlers.power(args)
 			end
 			return t, total
 		end
-		local made, made_total = flows("input")
-		local used, used_total = flows("output")
+		-- Electric network statistics count consumption as "input" and
+		-- generation as "output" (checked live in 2.1.25), the reverse of items.
+		local made, made_total = flows("output")
+		local used, used_total = flows("input")
 		out[#out + 1] = {
 			network = id, generators = n.generators, capacity_w = round(n.capacity_w),
 			produced_w = round(made_total), consumed_w = round(used_total),
@@ -1379,6 +1414,20 @@ local function goto_step(a, c, goal, within)
 	return false
 end
 
+-- Moves the character to the nearest spot with clear space around it (at
+-- most a few tiles). Used when the pathfinder rejects its start position,
+-- e.g. wedged in the gap between an assembler and an inserter.
+local function unstick(c)
+	local here = c.position
+	for _, r in ipairs({ 1.5, 3, 5 }) do
+		local p = c.surface.find_non_colliding_position("character", { here.x + 0.01, here.y + 0.01 }, r, 0.5, true)
+		if p and (math.abs(p.x - here.x) > 0.3 or math.abs(p.y - here.y) > 0.3) then
+			c.teleport(p)
+			return p
+		end
+	end
+end
+
 script.on_event(defines.events.on_script_path_request_finished, function(event)
 	local a = storage.agent
 	if not (a and a.path_req == event.id) then return end
@@ -1388,6 +1437,12 @@ script.on_event(defines.events.on_script_path_request_finished, function(event)
 	else
 		a.path_fail = (a.path_fail or 0) + 1
 		if event.try_again_later then return end
+		-- first failure: the start spot is often the problem, so step clear and retry
+		if a.path_fail == 1 then
+			local c = agent_char()
+			if c then unstick(c) end
+			return
+		end
 		if a.path_fail >= 3 then
 			local job = a.jobs[1]
 			a.path_goal, a.path_fail = nil, nil
@@ -1558,7 +1613,10 @@ function handlers.agent_spawn(args)
 	local surface = surface_of(args)
 	local p = player_of(args)
 	local want = pos_of(args.position) or (p and p.position) or { x = 0, y = 0 }
-	local pos = surface.find_non_colliding_position("character", want, 30, 0.5)
+	-- search with a 2x2 box so the spot has real room around it, not a gap
+	-- between machines that the pathfinder will refuse to start from
+	local pos = surface.find_non_colliding_position("stone-furnace", want, 30, 1, true)
+	if pos then pos = { x = pos.x, y = pos.y } end
 	if not pos then error("no room for a character near " .. want.x .. "," .. want.y) end
 	c = surface.create_entity { name = "character", position = pos, force = force_of(args) }
 	c.color = AGENT_COLOR
@@ -1590,6 +1648,13 @@ function handlers.agent_status()
 	local job = a.jobs[1]
 	return { alive = true, position = c.position, job = job and job.type, queued = #a.jobs,
 		walking = c.walking_state.walking, crafting = c.crafting_queue_size, inventory = items }
+end
+
+function handlers.agent_unstick()
+	local c = agent_char()
+	if not c then error("no agent") end
+	local p = unstick(c)
+	return { moved = p ~= nil, position = c.position }
 end
 
 function handlers.agent_stop()

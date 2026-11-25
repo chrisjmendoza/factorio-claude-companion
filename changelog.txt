@@ -1,4 +1,12 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.2.1
+Date: 2026-11-24
+  Bugfixes:
+    - Claude's character now spawns with clear space around it. It could land in the gap between an assembler and an inserter, where the pathfinder refuses to start, so every walk failed.
+    - If a walk fails, the character steps to the nearest clear spot and tries again. New agent_unstick command does the same on request.
+    - New clear_under_ghosts command marks only trees and rocks under planned builds; cancel_deconstruct undoes tree and rock removal orders in an area.
+    - Power readout: production and consumption were swapped (electric statistics count consumption as input).
+---------------------------------------------------------------------------------------------------
 Version: 0.2.0
 Date: 2026-11-24
   Features:
