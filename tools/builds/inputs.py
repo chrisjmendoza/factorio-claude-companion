@@ -11,7 +11,7 @@ ents = bp["entities"]
 xs = [e["position"]["x"] for e in ents]; ys = [e["position"]["y"] for e in ents]
 # offset guess: build_blueprint centres the bounding box on the position
 cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
-off = (at[0] - round(cx), at[1] - round(cy))
+off = (at[0] - round(cx) + 1, at[1] - round(cy))  # +1 x: checked against the live map (base iron input is at x 60)
 print("entity bbox", min(xs), min(ys), max(xs), max(ys), "offset guess", off)
 
 V = {0: (0, -1), 4: (1, 0), 8: (0, 1), 12: (-1, 0)}
@@ -68,3 +68,4 @@ for t, e in tiles.items():
 for (x, y), d in sorted(sources):
     wx, wy = x + off[0], y + off[1]
     print(f"source world ({wx:.0f},{wy:.0f}) dir {d:2d}  label {label_near(x + 0.5, y + 0.5)}")
+
