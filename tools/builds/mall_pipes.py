@@ -11,7 +11,7 @@ N, E, S, W = 0, 4, 8, 12
 anchor = {"x": 40, "y": -38, "rot": 3, "mirror": False}
 A = lambda x, r: {"n": "assembling-machine-1", "x": x + 1.5, "y": -2.5, "d": 0, "r": r}
 I = lambda x, y, d: {"n": "inserter", "x": x + 0.5, "y": y + 0.5, "d": d}
-C = lambda x, y: {"n": "wooden-chest", "x": x + 0.5, "y": y + 0.5, "d": 0}
+C = lambda x, y: {"n": "iron-chest", "x": x + 0.5, "y": y + 0.5, "d": 0}  # machine-made (Chris)
 P = lambda x, y: {"n": "small-electric-pole", "x": x + 0.5, "y": y + 0.5, "d": 0}
 loc = [
     A(26, "pipe"), I(27, -1, S),                 # iron off A
@@ -20,6 +20,9 @@ loc = [
     A(30, "pipe-to-ground"), I(31, -1, S),       # iron off A
     I(33, -3, W), C(34, -3),                     # pipe-to-ground out
     P(29, -1), P(29, -5), P(33, -1),
+    A(36, "iron-chest"), I(37, -1, S),           # iron chests: iron off A
+    I(39, -3, W), C(40, -3),                     # out to a chest
+    P(38, -1),
 ]
 pole_cell = [(19.5, -0.5), (23.5, -4.5)]
 print("link to pole cell:", round(min(math.dist((29.5, -0.5), p) for p in pole_cell), 2))

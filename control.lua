@@ -167,6 +167,26 @@ local function same_spot(e, spec)
 	return math.abs(e.position.x - spec.position.x) < 0.01 and math.abs(e.position.y - spec.position.y) < 0.01
 end
 
+-- Machines that can't be rotated (assemblers without fluid boxes, poles,
+-- chests) are stored facing north whatever a rotated template says, so only
+-- compare facing for things that actually rotate.
+local FACING_FREE = {
+	["electric-pole"] = true, container = true, ["logistic-container"] = true, lamp = true, lab = true,
+	furnace = true, roboport = true, radar = true, ["constant-combinator"] = false,
+}
+local function same_facing(e, spec)
+	if e.direction == spec.direction then return true end
+	local proto = prototypes.entity[spec.name]
+	if FACING_FREE[proto.type] then return true end
+	if proto.type == "assembling-machine" then
+		-- facing only matters for an assembler with fluid connections
+		local ok, boxes = pcall(function() return proto.fluidbox_prototypes end)
+		return ok and (boxes == nil or #boxes == 0)
+	end
+	local ok, rotatable = pcall(function() return proto.supports_direction end)
+	return ok and rotatable == false
+end
+
 -- Decides whether `spec` can go down. Returns status, detail, obstacles:
 --   "ok"      can be placed; obstacles = trees/rocks to clear first
 --   "exists"  the same entity or ghost is already there
@@ -180,11 +200,11 @@ local function assess(surface, force, spec)
 	local obstacles = {}
 	for _, e in pairs(found) do
 		if e.type == "entity-ghost" then
-			if e.ghost_name == spec.name and same_spot(e, spec) and e.direction == spec.direction then
+			if e.ghost_name == spec.name and same_spot(e, spec) and same_facing(e, spec) then
 				return "exists", "ghost"
 			end
 			return "blocked", "ghost of " .. e.ghost_name .. " at " .. round(e.position.x) .. "," .. round(e.position.y)
-		elseif e.name == spec.name and same_spot(e, spec) and e.direction == spec.direction then
+		elseif e.name == spec.name and same_spot(e, spec) and same_facing(e, spec) then
 			return "exists", "built"
 		elseif CLEARABLE[e.type] then
 			obstacles[#obstacles + 1] = e
