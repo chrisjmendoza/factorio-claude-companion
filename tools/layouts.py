@@ -185,6 +185,31 @@ def drill_strip(segments=2, tail=0, drill="electric-mining-drill", belt="transpo
     return out
 
 
+def drill_row(pairs=4, belt="transport-belt", drill="electric-mining-drill", pole="small-electric-pole"):
+    """Chris's mining layout: drills side by side with no gaps, facing a shared
+    belt that flows north, and one free column behind each drill row for poles.
+
+    Columns west to east: poles (x 0), drills (1..3), belt (4), drills (5..7),
+    poles (8). Nine tiles wide, 3*pairs long. Drills come in pairs along each
+    side; a small pole behind each pair (every 6 tiles) touches both drills,
+    and the poles are 6 apart, inside wire reach. No gap rows, so more drills
+    per tile of ore than drill_strip. Local tile (0, 0) is the north-west corner.
+    """
+    out = []
+    length = 3 * pairs
+    for ty in range(length):
+        out.append(ent(belt, 4.5, ty + 0.5, N))
+    for k in range(pairs):
+        cy = 3 * k + 1.5
+        out.append(ent(drill, 2.5, cy, E))
+        out.append(ent(drill, 6.5, cy, W))
+        if k % 2 == 0:
+            py = 3 * k + 3.0  # between this drill and the next one
+            out.append(ent(pole, 0.5, py - 0.5 if py < length else length - 0.5))
+            out.append(ent(pole, 8.5, py - 0.5 if py < length else length - 0.5))
+    return out
+
+
 def burner_smelt(count=4, rows=1):
     """Burner drills dropping straight into stone furnaces: no belts, no power.
 
@@ -347,6 +372,7 @@ LAYOUTS = {
     "burner_coal": burner_coal,
     "coal_loop": coal_loop,
     "coal_snake": coal_snake,
+    "drill_row": drill_row,
     "steam_dual": steam_dual,
     "smelter_column": smelter_column,
 }
