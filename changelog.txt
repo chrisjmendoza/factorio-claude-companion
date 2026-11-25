@@ -1,4 +1,10 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.2.2
+Date: 2026-11-24
+  Features:
+    - Claude's character shows on the map (a gold dot and name that follow it). agent_mark adds it to a character spawned earlier.
+    - agent_kit gives Claude's character the Simple Bot Start kit (power armor mk2, roboports, reactors, 50 construction robots), so its bots build ghosts around it.
+---------------------------------------------------------------------------------------------------
 Version: 0.2.1
 Date: 2026-11-24
   Bugfixes:

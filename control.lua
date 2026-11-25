@@ -1625,6 +1625,13 @@ function handlers.agent_spawn(args)
 		a.label = rendering.draw_text { text = "Claude", surface = surface, target = { entity = c, offset = { 0, -2.6 } },
 			color = AGENT_COLOR, scale = 1.3, alignment = "center" }
 	end)
+	-- player-less characters don't show on the map, so draw a marker there that follows it
+	pcall(function()
+		a.map_dot = rendering.draw_circle { surface = surface, target = c, radius = 1.5, filled = true,
+			color = AGENT_COLOR, render_mode = "chart" }
+		a.map_label = rendering.draw_text { text = "Claude", surface = surface, target = { entity = c, offset = { 0, -3 } },
+			color = AGENT_COLOR, scale = 3, alignment = "center", render_mode = "chart" }
+	end)
 	say("I'm here! [gps=" .. math.floor(pos.x) .. "," .. math.floor(pos.y) .. "]")
 	return { spawned = true, position = pos }
 end
@@ -1648,6 +1655,48 @@ function handlers.agent_status()
 	local job = a.jobs[1]
 	return { alive = true, position = c.position, job = job and job.type, queued = #a.jobs,
 		walking = c.walking_state.walking, crafting = c.crafting_queue_size, inventory = items }
+end
+
+-- Adds the map marker to an agent spawned before markers existed.
+function handlers.agent_mark()
+	local a = agent_state()
+	local c = agent_char()
+	if not c then error("no agent") end
+	for _, k in ipairs({ "map_dot", "map_label" }) do
+		if a[k] and a[k].valid then a[k].destroy() end
+	end
+	a.map_dot = rendering.draw_circle { surface = c.surface, target = c, radius = 1.5, filled = true,
+		color = AGENT_COLOR, render_mode = "chart" }
+	a.map_label = rendering.draw_text { text = "Claude", surface = c.surface, target = { entity = c, offset = { 0, -3 } },
+		color = AGENT_COLOR, scale = 3, alignment = "center", render_mode = "chart" }
+	return { marked = true }
+end
+
+-- Gives the agent the same kit Simple Bot Start gives a player (power armor
+-- mk2 with roboports, reactors, batteries and shields, plus 50 construction
+-- robots), so its bots build ghosts around it. Only on Chris's say-so.
+local AGENT_KIT = {
+	"fission-reactor-equipment", "fission-reactor-equipment", "personal-roboport-mk2-equipment",
+	"personal-roboport-mk2-equipment", "fission-reactor-equipment", "fission-reactor-equipment",
+	"personal-roboport-mk2-equipment", "personal-roboport-mk2-equipment", "battery-mk2-equipment",
+	"battery-mk2-equipment", "energy-shield-mk2-equipment", "energy-shield-mk2-equipment",
+	"energy-shield-mk2-equipment", "energy-shield-mk2-equipment",
+}
+
+function handlers.agent_kit()
+	local c = agent_char()
+	if not c then error("no agent") end
+	local armor = c.get_inventory(defines.inventory.character_armor)
+	if armor[1].valid_for_read then return { already = armor[1].name } end
+	armor.insert { name = "power-armor-mk2", count = 1 }
+	local grid = armor[1].grid
+	local placed = 0
+	for _, name in ipairs(AGENT_KIT) do
+		if grid.put { name = name } then placed = placed + 1 end
+	end
+	local bots = c.insert { name = "construction-robot", count = 50 }
+	say("Suited up: power armor, roboports and " .. bots .. " construction bots.")
+	return { equipment = placed, bots = bots }
 end
 
 function handlers.agent_unstick()
