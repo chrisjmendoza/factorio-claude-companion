@@ -30,6 +30,7 @@ Things learned while building with Claude Companion, from mistakes and from stud
 - **Respect what Chris planted.** The fastest path ran straight down his tree avenue. Pass `--avoid x1,y1,x2,y2` for planted or decorative areas before routing.
 - **Pole lines must check reach at corners.** "A pole every 6 tiles, beside the belt" let a corner's side offset stretch one gap to 8.6 tiles, over the 7.5 reach, which would have left the coal strip unpowered. `route.py` now measures every gap.
 - **Assemblers don't accept science packs,** so science assemblers can't be chained. Each needs its own inserter into a lab.
+- **Every mall output chest needs a limit.** An uncapped chest keeps its assembler running and drains shared inputs. The lamp line made 707 lamps (707 circuits plus iron and copper) and the pole line 764 poles, while red science starved of gears. After capping belts (2 slots), red arms, drills, assemblers and lamps (1 each) and poles (2), the inserter chest went from near-empty to 178 in one cycle. Set limits as part of building the cell.
 - **Burner smelters fed by long-handed inserters keep their output empty.** There's nothing to collect there; plates are on the belt.
 - **Ratios:** electric drill 0.5 ore/s; stone furnace 0.3125 plates/s; assembler 1 runs at 0.5 speed. One gear assembler 1 makes 1 gear/s, which starved the mall. A yellow inserter moves about 0.83 items/s, so a single chest-feed inserter capped the whole mall.
 
