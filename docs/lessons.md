@@ -1,0 +1,50 @@
+# Lessons learned
+
+Things learned while building with Claude Companion, from mistakes and from studying Chris's blueprints. Add an entry whenever something breaks or a blueprint teaches something new. Say what happened, why, and what to do instead.
+
+## Belts and lanes
+
+- **Inserters drop on the far lane; drills drop on the near lane.** A drill's output point sits just past its edge, inside the near half of the next tile.
+- **Sideloading** (a belt running into the side of another) puts everything on the target's near lane. If the target tile has nothing feeding it from behind, it turns into a **curve** instead, which keeps both lanes. A sideload tile needs a belt behind it.
+- **Sideloading into an underground** passes only the lane on the open side; the hood blocks the other half. Chris's blueprints use this on purpose to merge one lane into a tunnel while the other lane carries on (it's also in blueprint-tools/CLAUDE.md). Don't "fix" it.
+- **Splitters** keep lanes and split each lane separately. A splitter facing a belt's side sideloads.
+- **Lane plans are part of the design.** On 2026-11-24 the outpost links swapped the mall belt's lanes (iron west, copper east) while old plates still sat on it, and Chris had to clear it by hand. Before changing which side feeds a belt, warn first and plan the cleanup.
+- **Undergrounds (Chris's style):** one pair per crossing at full reach (yellow 4, red 6, blue 8, turbo 10 tiles between). Go under at belt intersections for breathing room. Don't chain short pairs.
+
+## Placement and ghosts
+
+- **Trees can't be ghosts.** The game rejects `entity-ghost` for the tree type whatever its flags. A ghostable stand-in, such as a planted-sapling `simple-entity-with-owner` that the mod swaps for a tree once built, does work (tested headless).
+- **Ghosts don't block tree growth.** TreeRegrow seeds landed under base ghosts and stopped the robots. Fixed in 0.1.5; any spawning script must check for ghosts itself.
+- **A splitter ghost can only replace a belt once that belt is marked for deconstruction.** Marking a live belt is risky: bots may lift it before a splitter exists and starve whatever it feeds (the steam plant's coal, at one point). Have the splitter in hand first.
+- **Trees under a pasted base:** clear only what overlaps ghosts (`clear_under_ghosts`). A blanket sweep felled about 500 trees Chris didn't want and flooded his inventory with wood. Ask before clearing forest.
+- **Pole coverage:** a small pole powers 2.5 tiles each way from its centre. When adding one inserter or machine by hand, check it's inside a supply area (missed once and Chris caught it).
+- **Blueprint world offsets:** `build_blueprint` centres the print. Working out world coordinates from blueprint coordinates came out one tile off in x, and the iron route stopped one tile short. Check computed positions against the live map before routing to them.
+
+## Generated layouts
+
+- **Always run a dead-end lint before placing a route.** A dry-run `check` only compares the world against the plan, so a tile missing from the plan passes. The copper route shipped with a one-tile gap (an off-by-one `range`). `route.py` now refuses routes with dead ends.
+- **Assemblers don't accept science packs,** so science assemblers can't be chained. Each needs its own inserter into a lab.
+- **Burner smelters fed by long-handed inserters keep their output empty.** There's nothing to collect there; plates are on the belt.
+- **Ratios:** electric drill 0.5 ore/s; stone furnace 0.3125 plates/s; assembler 1 runs at 0.5 speed. One gear assembler 1 makes 1 gear/s, which starved the mall. A yellow inserter moves about 0.83 items/s, so a single chest-feed inserter capped the whole mall.
+
+## Factorio 2.x API
+
+- Electric network statistics count consumption as **input** and production as **output**, the reverse of item statistics. They're only available on **electric poles** (`pole.electric_network_statistics`).
+- Reading a key a LuaObject doesn't have **raises**, it doesn't return nil. Many prototype stats became quality methods (`get_max_power_output()`), so wrap version-dependent lookups in `pcall`.
+- `set_recipe` returns items as name-to-count in 1.1 and as a list of records in 2.x; handle both.
+- Fuel is `fuel_categories = {"chemical"}` (plural) in 2.1.
+- **Player-less characters** need room to start: the pathfinder refuses a start wedged between machines, even when `find_non_colliding_position` accepted it. Spawn with 2x2 clearance, and step clear after a failed path. They don't show on the map, so draw a `render_mode = "chart"` marker. A personal roboport on one works: its bots build ghosts from its inventory.
+
+## Tooling (Windows)
+
+- Factorio's Lua UDP socket starts with a small buffer and **drops the first datagram over about 4 KB** each session while it grows. Batch requests under 3 KB.
+- Lua's JSON writes an empty table as `{}`, so an empty list arrives as a dict.
+- PowerShell `>` writes UTF-16, which `fbp` can't read, and `Set-Content -Encoding utf8` adds a BOM that breaks Factorio's `info.json` and changelog. Write files from Python, or as ASCII.
+- Inline `python -c` with quotes inside PowerShell breaks easily. Put anything non-trivial in a script file.
+- A zip Factorio has open can't be deleted. Deploy new versions under new names and remove the old zip after the game closes (a background wait loop).
+
+## From Chris's designs
+
+- **Coal snake:** 16 burner drills in one serpentine loop on coal, each fuelling the next; it stores up to 800 coal. Better output than a 4-drill pinwheel. Layout: `coal_snake`.
+- **Dual-sided steam:** a coal belt up the middle, boilers both sides, 2 engines per boiler; it grows a unit at a time to 20 boilers per pump. Layout: `steam_dual`.
+- **Starter base book (v17/18):** ore and coal enter on each smelting line's west end, each input labelled with a constant combinator; plates run east into a spine of one belt per item, with splitter taps under the columns into the wings. Stages paste over each other (stone, then steel, then electric furnaces; assembler 1, 2, 3).
