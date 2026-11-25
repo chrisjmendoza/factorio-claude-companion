@@ -18,6 +18,8 @@ Things learned while building with Claude Companion, from mistakes and from stud
 - **A splitter ghost can only replace a belt once that belt is marked for deconstruction.** Marking a live belt is risky: bots may lift it before a splitter exists and starve whatever it feeds (the steam plant's coal, at one point). Have the splitter in hand first.
 - **Trees under a pasted base:** clear only what overlaps ghosts (`clear_under_ghosts`). A blanket sweep felled about 500 trees Chris didn't want and flooded his inventory with wood. Ask before clearing forest.
 - **Pole coverage:** a small pole powers 2.5 tiles each way from its centre. When adding one inserter or machine by hand, check it's inside a supply area (missed once and Chris caught it).
+- **Keep growth paths clear.** Lamps placed "beside every pole" landed on the steam plant's next-unit row (the water pipe and coal belt continue there) and blocked its growth, breaking the "tileable without change" promise. When decorating, skip any build's reserved growth tiles; a dry run of the next size catches it.
+- **Drill strips need a powered path back to the grid.** The south ore lines' poles ended at the base's edge, but the base's own poles weren't built yet, so the strips sat at status 60 (no power). Check drill status after building an outpost; 1 is working, 38 is output full.
 - **Blueprint world offsets:** `build_blueprint` centres the print. Working out world coordinates from blueprint coordinates came out one tile off in x, and the iron route stopped one tile short. Check computed positions against the live map before routing to them.
 
 ## Generated layouts
