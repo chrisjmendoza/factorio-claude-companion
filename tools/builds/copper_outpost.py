@@ -36,7 +36,7 @@ specs.append(T("underground-belt", -12, 43, E, t="output"))
 for x in range(-11, 37):
     specs.append(T("transport-belt", x, 43, E))
 # north up x 38 to the coal row, under it, on to the mall
-for y in range(43, -25, -1):
+for y in range(43, -26, -1):  # up to and including -25, the tile before the underground
     specs.append(T("transport-belt", 37, y, N))
 specs.append(T("underground-belt", 37, -26, N, t="input"))
 specs.append(T("underground-belt", 37, -28, N, t="output"))
