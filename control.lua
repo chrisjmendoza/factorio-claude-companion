@@ -1606,6 +1606,17 @@ script.on_nth_tick(1, function()
 	end
 end)
 
+-- Player characters reveal the map around them; a player-less one doesn't,
+-- so chart around Claude's character once a second (also keeps its map
+-- marker visible, since chart-mode drawings only show on charted ground).
+script.on_nth_tick(60, function()
+	local a = storage.agent
+	local c = a and a.char
+	if not (c and c.valid) then return end
+	local p = c.position
+	c.force.chart(c.surface, { { p.x - 48, p.y - 48 }, { p.x + 48, p.y + 48 } })
+end)
+
 function handlers.agent_spawn(args)
 	local a = agent_state()
 	local c = agent_char()
@@ -1615,7 +1626,9 @@ function handlers.agent_spawn(args)
 	local want = pos_of(args.position) or (p and p.position) or { x = 0, y = 0 }
 	-- search with a 2x2 box so the spot has real room around it, not a gap
 	-- between machines that the pathfinder will refuse to start from
-	local pos = surface.find_non_colliding_position("stone-furnace", want, 30, 1, true)
+	-- (a 2x2 footprint sits on tile corners, so no force-to-tile-centre here)
+	local pos = surface.find_non_colliding_position("stone-furnace", want, 100, 0.5)
+		or surface.find_non_colliding_position("character", want, 100, 0.5)
 	if pos then pos = { x = pos.x, y = pos.y } end
 	if not pos then error("no room for a character near " .. want.x .. "," .. want.y) end
 	c = surface.create_entity { name = "character", position = pos, force = force_of(args) }

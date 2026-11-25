@@ -131,17 +131,46 @@ def dead_ends(specs, goal, end_dir):
     return bad
 
 
-def poles_along(specs, grid, taken, every=6):
+REACH = 7.5
+
+
+def poles_along(specs, grid, taken, every=6, existing=()):
+    """Poles beside the path, never more than a small pole's wire reach apart.
+
+    Walks the path and places a pole whenever the next tile would be out of
+    reach of the last one (corners included: the side offset can stretch a
+    gap past the reach, which once left a coal line unpowered). Poles that
+    already exist within reach of the path start are reused instead of
+    laying a second line beside them.
+    """
     pts, out = [(math.floor(s["x"]), math.floor(s["y"]), s["d"]) for s in specs], []
-    for i in range(0, len(pts), every):
-        x, y, d = pts[i]
+    last = None
+    for x, y, _ in pts[:1]:
+        near = [p for p in existing if math.dist(p, (x + 0.5, y + 0.5)) <= REACH - 1]
+        if near:
+            last = min(near, key=lambda p: math.dist(p, (x + 0.5, y + 0.5)))
+    for i, (x, y, d) in enumerate(pts):
+        here = (x + 0.5, y + 0.5)
+        # an existing pole close by (e.g. a line along a parallel route) serves here too
+        near = [p for p in existing if math.dist(p, here) <= every - 2]
+        if near:
+            last = min(near, key=lambda p: math.dist(p, here))
+            continue
+        if last is not None and math.dist(last, here) < every:
+            continue
+        placed = False
         for side in (left(d), right(d)):
             vx, vy = VEC[side]
             t = (x + vx, y + vy)
-            if grid.get(t) in PASSABLE and t not in taken:
-                out.append({"n": "small-electric-pole", "x": t[0] + 0.5, "y": t[1] + 0.5, "d": 0})
+            c = (t[0] + 0.5, t[1] + 0.5)
+            if grid.get(t) in PASSABLE and t not in taken and (last is None or math.dist(last, c) <= REACH):
+                out.append({"n": "small-electric-pole", "x": c[0], "y": c[1], "d": 0})
                 taken.add(t)
+                last = c
+                placed = True
                 break
+        if not placed and last is not None and math.dist(last, here) > REACH - 1:
+            print(f"warning: no pole spot near {x},{y}; check the gap there")
     return out
 
 
@@ -173,7 +202,14 @@ def main():
         sys.exit("refusing to place a route with dead ends")
     if a.poles:
         taken = {(math.floor(s['x']), math.floor(s['y'])) for s in specs}
-        specs += poles_along(specs, grid, taken)
+        # built poles show as '+' on the map; ghost poles as ':' (shared with other ghosts),
+        # so also ask the game for pole ghosts in the box
+        existing = [(x + 0.5, y + 0.5) for (x, y), ch in grid.items() if ch == "+"]
+        box = [[min(sx, gx) - m, min(sy, gy) - m], [max(sx, gx) + m, max(sy, gy) + m]]
+        for e in cc.call("scan", {"area": box}, timeout=60)["entities"]:
+            if e["n"] == "small-electric-pole":
+                existing.append((e["x"], e["y"]))
+        specs += poles_along(specs, grid, taken, existing=existing)
     if a.save:
         json.dump(specs, open(a.save, "w"))
     res = cc.call_batched("place" if a.place else "check", specs, {"tag": a.tag, "partial": True})

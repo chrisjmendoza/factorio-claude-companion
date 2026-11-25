@@ -23,6 +23,8 @@ Things learned while building with Claude Companion, from mistakes and from stud
 ## Generated layouts
 
 - **Always run a dead-end lint before placing a route.** A dry-run `check` only compares the world against the plan, so a tile missing from the plan passes. The copper route shipped with a one-tile gap (an off-by-one `range`). `route.py` now refuses routes with dead ends.
+- **Belts need no power; pole lines along a route only carry power to its far end.** Two parallel routes share one pole line, split where they diverge. Laying a line per route doubled the poles down the shared corridor (Chris caught it). `route.py` now reuses existing poles near the path.
+- **Pole lines must check reach at corners.** "A pole every 6 tiles, beside the belt" let a corner's side offset stretch one gap to 8.6 tiles, over the 7.5 reach, which would have left the coal strip unpowered. `route.py` now measures every gap.
 - **Assemblers don't accept science packs,** so science assemblers can't be chained. Each needs its own inserter into a lab.
 - **Burner smelters fed by long-handed inserters keep their output empty.** There's nothing to collect there; plates are on the belt.
 - **Ratios:** electric drill 0.5 ore/s; stone furnace 0.3125 plates/s; assembler 1 runs at 0.5 speed. One gear assembler 1 makes 1 gear/s, which starved the mall. A yellow inserter moves about 0.83 items/s, so a single chest-feed inserter capped the whole mall.
@@ -34,6 +36,9 @@ Things learned while building with Claude Companion, from mistakes and from stud
 - `set_recipe` returns items as name-to-count in 1.1 and as a list of records in 2.x; handle both.
 - Fuel is `fuel_categories = {"chemical"}` (plural) in 2.1.
 - **Player-less characters** need room to start: the pathfinder refuses a start wedged between machines, even when `find_non_colliding_position` accepted it. Spawn with 2x2 clearance, and step clear after a failed path. They don't show on the map, so draw a `render_mode = "chart"` marker. A personal roboport on one works: its bots build ghosts from its inventory.
+
+- **Headless `--benchmark` never processes `force.chart`** (`is_chunk_charted` stays false even when called directly), so map-reveal code can only be checked in a real game.
+- **Player-less characters don't reveal the map** the way player characters do. Chart around them from script (`force.chart` once a second).
 
 ## Tooling (Windows)
 
