@@ -26,6 +26,8 @@ Things learned while building with Claude Companion, from mistakes and from stud
 
 - **Always run a dead-end lint before placing a route.** A dry-run `check` only compares the world against the plan, so a tile missing from the plan passes. The copper route shipped with a one-tile gap (an off-by-one `range`). `route.py` now refuses routes with dead ends.
 - **Belts need no power; pole lines along a route only carry power to its far end.** Two parallel routes share one pole line, split where they diverge. Laying a line per route doubled the poles down the shared corridor (Chris caught it). `route.py` now reuses existing poles near the path.
+- **The router's "never take a belt's output" rule must exempt the route's own start.** The start tile is meant to receive the source belt's items. It only worked while the source was still a ghost (ghosts don't count as feeding); once built, every route from it came back "no route found". Found by flood-filling and splitting the route into halves.
+- **Respect what Chris planted.** The fastest path ran straight down his tree avenue. Pass `--avoid x1,y1,x2,y2` for planted or decorative areas before routing.
 - **Pole lines must check reach at corners.** "A pole every 6 tiles, beside the belt" let a corner's side offset stretch one gap to 8.6 tiles, over the 7.5 reach, which would have left the coal strip unpowered. `route.py` now measures every gap.
 - **Assemblers don't accept science packs,** so science assemblers can't be chained. Each needs its own inserter into a lab.
 - **Burner smelters fed by long-handed inserters keep their output empty.** There's nothing to collect there; plates are on the belt.

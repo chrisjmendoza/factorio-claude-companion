@@ -185,12 +185,19 @@ def main():
     ap.add_argument("--place", action="store_true")
     ap.add_argument("--tag", default="route")
     ap.add_argument("--save", default=None, help="write the specs here as JSON")
+    ap.add_argument("--avoid", action="append", default=[],
+                    help="x1,y1,x2,y2 box the route must not enter (e.g. a planted avenue); repeatable")
     a = ap.parse_args()
     sx, sy = map(int, a.src.split(","))
     gx, gy = map(int, a.to.split(","))
     m = a.margin
     grid = load_grid(min(sx, gx) - m, min(sy, gy) - m, max(sx, gx) + m, max(sy, gy) + m)
     avoid = blocked_by_feeds(grid)
+    for box in a.avoid:
+        x1, y1, x2, y2 = map(int, box.split(","))
+        avoid |= {(x, y) for x in range(x1, x2 + 1) for y in range(y1, y2 + 1)}
+    # the start tile is meant to receive the source belt's items
+    avoid.discard((sx, sy))
     path = astar(grid, (sx, sy), [NAMES[s] for s in a.start.split(",")], (gx, gy), NAMES[a.end], avoid)
     if not path:
         sys.exit("no route found")
