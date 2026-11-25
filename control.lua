@@ -953,6 +953,15 @@ function handlers.set_recipe(args)
 	return { name = e.type == "entity-ghost" and e.ghost_name or e.name, recipe = args.recipe, returned_to_player = back }
 end
 
+-- {position, to}: marks a built entity for upgrade to `to` (e.g. an
+-- assembler 1 to an assembler 2). Robots swap it like the upgrade planner does,
+-- keeping the recipe; the new item must be in the network or your inventory.
+function handlers.upgrade(args)
+	local e = entity_at(args)
+	local ok = e.order_upgrade { target = args.to, force = force_of(args), player = player_of(args) }
+	return { entity = e.name, to = args.to, ordered = ok }
+end
+
 -- {position, slots}: limits a chest to that many slots (the red X bar);
 -- slots = nil removes the limit. Built chests only.
 function handlers.chest_limit(args)
