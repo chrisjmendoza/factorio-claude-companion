@@ -1,0 +1,13 @@
+{
+    "name": "ClaudeCompanion",
+    "version": "0.2.0",
+    "factorio_version": "2.1",
+    "dependencies": [
+        "base >= 2.1.7"
+    ],
+    "title": "Claude Companion",
+    "author": "chrisjmendoza",
+    "contact": "chrisjmendoza@gmail.com",
+    "homepage": "",
+    "description": "Play a map together with Claude. Chat goes to Claude and Claude answers in game chat; Claude reads the map and lays down builds as ghosts for your robots to construct. Requires launching Factorio with --enable-lua-udp 34198 and running the companion bridge."
+}

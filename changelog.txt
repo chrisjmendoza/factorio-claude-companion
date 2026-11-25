@@ -1,0 +1,18 @@
+---------------------------------------------------------------------------------------------------
+Version: 0.2.0
+Date: 2026-11-24
+  Features:
+    - Blueprint paste: Claude uploads a blueprint string in parts and the game's own build_blueprint places it as ghosts, keeping recipes, filters and circuit settings.
+    - Task board: a checklist panel Claude fills, with items that tick themselves off (research, items carried, buildings built, ghosts finished, amounts made) and a button that points you to the spot.
+    - Power readout per electric network (production, consumption, capacity, boilers out of fuel) and a telemetry log written every game minute to script-output.
+    - Claude can queue hand-crafting for your character, change a machine's recipe, set chest limits, and plant trees from your saplings.
+  Changes:
+    - Claude's chat text is a brighter gold.
+---------------------------------------------------------------------------------------------------
+Version: 0.1.0
+Date: 2026-11-24
+  Features:
+    - Chat, /claude messages, finished research and save loads are passed to Claude through script-output.
+    - Claude can read the map, find ore patches and shorelines, and place ghosts for your robots over a local UDP bridge.
+    - Trees and rocks under a placed ghost are marked for deconstruction.
+    - Optional cheats setting for running Lua and instant placement, off by default.
