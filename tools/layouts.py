@@ -122,8 +122,9 @@ def _steam_dual(units, inserter, pole):
 
     Same frame as steam_power: the pump sits on tile (0, 1) facing the water
     to the south and outputs onto (0, 0); the plant grows north. One unit is
-    4 tiles tall and holds 2 boilers and 4 engines; 10 units (20 boilers, 40
-    engines, 36 MW) is all one offshore pump can feed.
+    4 tiles tall and holds 2 boilers and 4 engines (3.6 MW). In 2.x one
+    water makes 10 steam, so a pump could feed 200 boilers; the real limit
+    is the coal belt down the middle, about 33 boilers (16 units) per yellow belt.
 
     Columns (x): engines -11..-2, west boiler -1..0 (water on its back column
     x 0), inserter 1, coal belt 2 flowing north, inserter 3, east boiler 4..5

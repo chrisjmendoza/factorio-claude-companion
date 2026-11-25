@@ -34,7 +34,7 @@ Things learned while building with Claude Companion, from mistakes and from stud
 - **Non-rotatable entities report facing north.** A rotated plan gives an assembler or pole another facing, so "same entity here?" must ignore facing for poles, chests, lamps, labs, furnaces and assemblers without fluid boxes, or a built machine looks like it blocks its own spot. (Assemblers count as rotatable because of fluid recipes, so `supports_direction` alone isn't enough.)
 - **Every mall output chest needs a limit.** An uncapped chest keeps its assembler running and drains shared inputs. The lamp line made 707 lamps (707 circuits plus iron and copper) and the pole line 764 poles, while red science starved of gears. After capping belts (2 slots), red arms, drills, assemblers and lamps (1 each) and poles (2), the inserter chest went from near-empty to 178 in one cycle. Set limits as part of building the cell.
 - **Burner smelters fed by long-handed inserters keep their output empty.** There's nothing to collect there; plates are on the belt.
-- **Ratios:** electric drill 0.5 ore/s; stone furnace 0.3125 plates/s; assembler 1 runs at 0.5 speed. One gear assembler 1 makes 1 gear/s, which starved the mall. A yellow inserter moves about 0.83 items/s, so a single chest-feed inserter capped the whole mall.
+- **Ratios:** electric drill 0.5 ore/s; stone furnace 0.3125 plates/s; assembler 1 runs at 0.5 speed. One gear assembler 1 makes 1 gear/s, which starved the mall. A yellow inserter moves about 0.86 items/s chest to chest (about 0.83 from a belt), so a single chest-feed inserter capped the whole mall. More numbers are under "Reference numbers" below.
 
 ## Factorio 2.x API
 
@@ -62,6 +62,69 @@ Things learned while building with Claude Companion, from mistakes and from stud
 - **Use iron chests, not wooden** (Chris): assemblers can make them from iron plates; wooden chests need wood carried in by hand. The mall has an iron-chest cell.
 - **Electric mining (Chris's tip):** put drills side by side with no gaps, facing the belt, and leave one free column behind each drill row for a line of poles. More drills per tile of ore than gap rows. Layout: `drill_row` (9 wide; a pole behind every pair of drills, 6 apart). The two pole columns are 8 apart, over wire reach, so link each side to the grid separately.
 - **Coal snake:** 16 burner drills in one serpentine loop on coal, each fuelling the next; it stores up to 800 coal. Better output than a 4-drill pinwheel. Layout: `coal_snake`.
-- **Dual-sided steam:** a coal belt up the middle, boilers both sides, 2 engines per boiler; it grows a unit at a time to 20 boilers per pump. Layout: `steam_dual`.
+- **Dual-sided steam:** a coal belt up the middle, boilers both sides, 2 engines per boiler; it grows a unit at a time. Layout: `steam_dual`. The pump isn't the limit in 2.x (one pump feeds 200 boilers, see "Reference numbers"). What limits it is the coal belt: a yellow belt (15 coal/s) feeds 33 boilers at 0.45 coal/s each.
 - **The starter book's full paste leaves furnace gaps in the smelting lines' top rows** (iron at x 73, 76, 121, 124; brick at 121, 124), where only poles and lamps stand. Chris counts them as missing. Each gap takes the neighbouring unit: furnace, long-handed inserter 2.5 above (input), inserter 1.5 below (output). Check pasted lines against both the standalone line blueprint and the full paste; they differ.
 - **Starter base book (v17/18):** ore and coal enter on each smelting line's west end, each input labelled with a constant combinator; plates run east into a spine of one belt per item, with splitter taps under the columns into the wings. Stages paste over each other (stone, then steel, then electric furnaces; assembler 1, 2, 3).
+
+## Reference numbers (Factorio 2.1, researched 2026-11-24)
+
+Checked against the game's own data files (2.1.25, base and space-age prototypes) and the wiki. Items marked *(unverified)* rest on community practice or on a figure worked out from cooldowns.
+
+### Throughput
+
+- **Belts:** yellow 15/s (7.5 per lane), red 30/s, blue 45/s, turbo 60/s (Space Age), at 4 items per lane per tile. An inserter won't drop onto a lane that's already packed solid.
+- **Inserters, chest to chest at hand size 1:** burner 0.79/s, yellow 0.86/s, long-handed 1.25/s, fast 2.5/s, bulk 2.5/s × hand size. A long-handed inserter beats a yellow one.
+- **Hand size in 2.0:** normal inserters start at 1, reach 2 at Inserter capacity bonus 2 (red+green science) and 3 at level 7. Bulk inserters start at 2 and reach 12 at level 7. Level 1 only helps bulk inserters.
+- **Names changed in 2.0:** the old stack inserter is now the **bulk** inserter. The new **stack** inserter (Space Age) is the only thing that stacks items on belts. Belt stacking (up to 4 per stack, any belt tier) needs the stack-inserter research plus Transport belt capacity 1–2.
+
+### Ratios
+
+- **Steam (2.x):** boilers conserve energy using each fluid's heat capacity (in-game changelog). Water's heat capacity is 2 kJ and steam's 0.2 kJ, so **1 water makes 10 steam**. The offshore pump gives 1,200 water/s with no power, a boiler uses 6 water/s for 60 steam/s, and an engine takes 30 steam/s for 900 kW. That's **1 pump : 200 boilers : 400 engines**; in 1.1 it was 1:20:40.
+- **Boiler:** burns 1.8 MW, which is 0.45 coal/s (coal holds 4 MJ), and makes 30 pollution/min.
+- **Smelting:** iron and copper plates take 3.2 s: a stone furnace makes 0.3125/s and a steel furnace 0.625/s, both burning 90 kW (0.0225 coal/s).
+  - A yellow belt of ore (15/s) fills 48 stone furnaces or 24 steel furnaces. A red belt fills 48 steel furnaces.
+  - Steel takes 16 s for 5 iron plates, so one iron furnace feeds exactly one steel furnace of the same type.
+  - Swapping stone furnaces for steel doubles the ore a column needs; check the input belt can carry it.
+- **Electric drill:** mines a 5×5 area, makes 0.5 ore/s (uranium 0.25/s) and uses 90 kW. It takes 15 drills per yellow lane, 30 per belt.
+- **Burner drill:** mines a 2×2 area, makes 0.25 ore/s and uses 150 kW (0.0375 coal/s). It pollutes 12/min, more than an electric drill's 10.
+- **Assemblers:** assembler 1 runs at 0.5 speed (75 kW), assembler 2 at 0.75 (150 kW), assembler 3 at 1.25 (375 kW). A lab uses 60 kW.
+- **Gears:** 0.5 s for 2 plates, so 1/s from an assembler 1, 1.5/s from an assembler 2 and 2.5/s from an assembler 3.
+- **Green circuits:** cable is 0.5 s for 2; a circuit is 1 iron plus 3 cable in 0.5 s. That gives **3 cable : 2 circuit assemblers** at any tier; an assembler 1 pair makes 1 circuit/s.
+- **Red science** (5 s): 0.1/s per assembler 1, so 1/s takes 10 of them plus 1 gear assembler.
+- **Green science** (6 s): 0.083/s per assembler 1. For equal output, use 5 red assemblers to every 6 green.
+
+### Power
+
+- **Poles (wire reach / supply area):** small 7.5 / 5×5, medium 9 / 7×7, big 32 / 4×4, substation 18 / 18×18. Medium and big poles come with Electric energy distribution 1 (needs steel); the substation with distribution 2.
+- **Solar:** a panel peaks at 60 kW and averages about 42 kW. An accumulator holds 5 MJ at up to 300 kW. Use about 0.84 accumulators per panel; about 24 panels and 20 accumulators give 1 MW around the clock.
+
+### Biters and defence
+
+- **Evolution** (default factors): time 0.000004/s, pollution 0.0000009 per unit produced, 0.002 per spawner killed. Each increase is scaled by (1 − evolution)², and since 2.0 evolution is tracked per planet. It counts pollution *produced*: absorption slows attacks but not evolution.
+- **Absorption per chunk per minute:**
+  - water 1.54, grass 1.11, sand 0.92
+  - concrete and landfill 0
+  - a healthy tree 0.06; trees start losing leaves above 60 pollution in their chunk
+  - one boiler's 30/min is about 27 grass chunks, or about 500 trees
+- **Attacks:** units only attack once pollution reaches a spawner. The pollution a spawner absorbs pays for attackers:
+  - biters: small 4, medium 20, big 80
+  - spitters: small 4, medium 12, big 30
+  - groups go out every 1–10 minutes, and expansion parties every 10–60 minutes, more often as evolution rises
+- **Gun turret:** range 18. A yellow magazine (4 iron, 1 s to craft) does 5 damage per round, 10 rounds; a red (piercing) one does 8. A firing turret uses about 1 magazine/s *(unverified, worked out)*, and inserters fill it to only 10 magazines.
+- **Ranges:** gun turrets (18) and laser turrets (24) outrange spitters (13–16). Worms (25–48) outrange gun turrets, so never build turrets in a worm's reach.
+- **Defence research:**
+  - Gun turret, Stone wall and Military each cost 10 red.
+  - Military 2 (piercing ammo) needs red+green and steel; Gate needs Stone wall and Military 2.
+  - Flamethrowers need oil; laser turrets need blue science.
+- **Walls** *(unverified, community practice)*: 1–2 thick, a few tiles in front of the turrets, so every wall tile sits inside turret range and biters stop to chew it while being shot.
+
+### Logistics gotchas
+
+- **Which lane an inserter takes from:** from a belt running across in front of it, the **near** lane first, and the far lane only when the near one is empty. From a belt pointing at it, or a curve, the belt's left lane.
+- **Long-handed inserters** pick up and drop exactly 2 tiles away; they can't reach the tile next to them.
+- **Filters in 2.0:** every inserter (burner included) has 5 filter slots, whitelist or blacklist. The filter inserter is gone.
+- **How much inserters load into a machine:** 1 craft plus the crafts it finishes in 1.166 s, rounded up, so at least 2 crafts. Fuel goes in up to 5 items.
+- **Chests:** wooden 16 slots, iron 32, steel 48. The red-X limit applies to the slots inserters fill.
+- **Splitter filters:** the filtered item leaves on one side and everything else on the other. If one output is blocked, everything leaves by the other.
+
+Sources: wiki.factorio.com (Transport belts/Physics, Inserters, Inserter capacity bonus, Bulk inserter, Power production, Steam engine, Boiler, Offshore pump, Big electric pole, Electric mining drill, Enemies, Pollution) and the Factorio 2.1.25 data files and changelog.
