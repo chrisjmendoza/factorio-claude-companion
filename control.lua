@@ -1366,6 +1366,8 @@ local DIR8 = {
 	defines.direction.west, defines.direction.northwest, defines.direction.north, defines.direction.northeast,
 }
 
+local unstick -- defined below, used by goto_step
+
 local function stop_walking(c)
 	c.walking_state = { walking = false, direction = defines.direction.north }
 end
@@ -1382,8 +1384,13 @@ local function goto_step(a, c, goal, within)
 	if not a.path then
 		if not a.path_req then
 			local proto = prototypes.entity["character"]
+			-- Plan with a padded box: the character only walks in 8 directions, so
+			-- a path threaded through a tight gap (between tree trunks, say) can't
+			-- be followed and it walks into the trunk. Padding keeps clearance.
+			-- Fall back to the true box after a failure, for genuinely tight spots.
+			local box = (a.path_fail or 0) == 0 and { { -0.45, -0.45 }, { 0.45, 0.45 } } or proto.collision_box
 			a.path_req = c.surface.request_path {
-				bounding_box = proto.collision_box, collision_mask = proto.collision_mask,
+				bounding_box = box, collision_mask = proto.collision_mask,
 				start = c.position, goal = goal, force = c.force, radius = math.max(within - 0.5, 0.5),
 				entity_to_ignore = c, pathfind_flags = { cache = false, prefer_straight_paths = true },
 			}
@@ -1404,12 +1411,16 @@ local function goto_step(a, c, goal, within)
 	end
 	local i = math.floor((math.atan2(dy, dx) / (2 * math.pi)) * 8 + 0.5) % 8
 	c.walking_state = { walking = true, direction = DIR8[i + 1] }
-	-- stuck check: no progress for 2 seconds -> re-path
-	a.stuck = a.stuck or { pos = p, tick = game.tick }
+	-- stuck check: no progress for 2 seconds -> re-path; still stuck after
+	-- that -> step to the nearest clear spot (it is usually wedged on a trunk)
+	a.stuck = a.stuck or { pos = p, tick = game.tick, tries = 0 }
 	if dist(a.stuck.pos, p) > 0.5 then
-		a.stuck = { pos = p, tick = game.tick }
+		a.stuck = { pos = p, tick = game.tick, tries = 0 }
 	elseif game.tick - a.stuck.tick > 120 then
-		a.path, a.path_req, a.stuck = nil, nil, nil
+		local tries = (a.stuck.tries or 0) + 1
+		if tries >= 2 then unstick(c) end
+		a.path, a.path_req = nil, nil
+		a.stuck = { pos = c.position, tick = game.tick, tries = tries }
 	end
 	return false
 end
@@ -1417,7 +1428,7 @@ end
 -- Moves the character to the nearest spot with clear space around it (at
 -- most a few tiles). Used when the pathfinder rejects its start position,
 -- e.g. wedged in the gap between an assembler and an inserter.
-local function unstick(c)
+unstick = function(c)
 	local here = c.position
 	for _, r in ipairs({ 1.5, 3, 5 }) do
 		local p = c.surface.find_non_colliding_position("character", { here.x + 0.01, here.y + 0.01 }, r, 0.5, true)

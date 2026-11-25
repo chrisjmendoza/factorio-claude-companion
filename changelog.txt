@@ -3,6 +3,7 @@ Version: 0.2.3
 Date: 2026-11-24
   Changes:
     - Claude's character reveals the map around itself, like a player does, so you can see it and the area it works in.
+    - Claude's character plans paths with clearance and steps free if it stays stuck, instead of walking into tree trunks forever.
     - Claude's character spawns on the nearest dry, roomy spot within 100 tiles (was 30, which could fail near water).
 ---------------------------------------------------------------------------------------------------
 Version: 0.2.2

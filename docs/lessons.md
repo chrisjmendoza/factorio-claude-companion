@@ -37,6 +37,8 @@ Things learned while building with Claude Companion, from mistakes and from stud
 - Fuel is `fuel_categories = {"chemical"}` (plural) in 2.1.
 - **Player-less characters** need room to start: the pathfinder refuses a start wedged between machines, even when `find_non_colliding_position` accepted it. Spawn with 2x2 clearance, and step clear after a failed path. They don't show on the map, so draw a `render_mode = "chart"` marker. A personal roboport on one works: its bots build ghosts from its inventory.
 
+- **Plan character paths with a padded hitbox.** Characters walk in only 8 directions, so a path threaded between tree trunks with the true ±0.2 box can't be followed. The character walked into a trunk and re-planned the same path for 9 minutes. Plan with ±0.45, and step clear if it's still stuck after two re-plans. Tested through 160 random trees.
+- **A Lua local can't see a local declared after it.** A function calling a helper defined further down gets nil unless the helper is forward-declared (`local unstick` up top, `unstick = function ...` below).
 - **Headless `--benchmark` never processes `force.chart`** (`is_chunk_charted` stays false even when called directly), so map-reveal code can only be checked in a real game.
 - **Player-less characters don't reveal the map** the way player characters do. Chart around them from script (`force.chart` once a second).
 
