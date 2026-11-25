@@ -5,6 +5,7 @@ Date: 2026-11-24
     - Claude's character reveals the map around itself, like a player does, so you can see it and the area it works in.
     - Claude's character plans paths with clearance and steps free if it stays stuck, instead of walking into tree trunks forever.
     - Placement checks no longer report a built assembler, pole, chest, lamp, lab or furnace as blocking its own planned spot when a rotated plan gives it a different facing.
+    - New agent job take_belt: Claude's character picks items straight off belts in an area (e.g. plates backed up on a spine), for hand-crafting what nothing else makes.
     - Claude's character spawns on the nearest dry, roomy spot within 100 tiles (was 30, which could fail near water).
 ---------------------------------------------------------------------------------------------------
 Version: 0.2.2

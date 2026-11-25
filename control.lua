@@ -1549,6 +1549,27 @@ local function job_step(a, c, job)
 		end
 		return "done", { item = job.item, moved = moved }
 
+	elseif job.type == "take_belt" then
+		-- pick items straight off belts in an area (e.g. plates backed up on a spine)
+		local area = job.area
+		local cx, cy = (area[1][1] + area[2][1]) / 2, (area[1][2] + area[2][2]) / 2
+		if not goto_step(a, c, { x = cx, y = cy }, AGENT_REACH) then return nil end
+		local want, got = job.count or 100, 0
+		for _, belt in pairs(c.surface.find_entities_filtered { area = area, type = { "transport-belt", "underground-belt", "splitter" } }) do
+			for li = 1, belt.get_max_transport_line_index() do
+				if got >= want then break end
+				local line = belt.get_transport_line(li)
+				local n = line.remove_item { name = job.item, count = want - got }
+				if n > 0 then
+					local put = inv.insert { name = job.item, count = n }
+					if put < n then line.insert_at_back({ name = job.item, count = n - put }) end
+					got = got + put
+				end
+			end
+			if got >= want then break end
+		end
+		return "done", { item = job.item, moved = got }
+
 	elseif job.type == "build" or job.type == "refuel" then
 		if not job.todo then
 			job.todo, job.made, job.skipped = {}, 0, {}
