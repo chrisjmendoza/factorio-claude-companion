@@ -5,12 +5,12 @@ Things learned while building with Claude Companion, from mistakes and from stud
 ## Belts and lanes
 
 - **Inserters drop on the far lane; drills drop on the near lane.** A drill's output point sits just past its edge, inside the near half of the next tile.
-- **Sideloading** (a belt running into the side of another) puts everything on the target's near lane. If the target tile has nothing feeding it from behind, it turns into a **curve** instead, which keeps both lanes. A sideload tile needs a belt behind it.
+- **Sideloading** (a belt running into the side of another) puts everything on the target's near lane. If the target tile has nothing feeding it from behind, it turns into a **curve** instead, which keeps both lanes. A sideload tile needs either a belt behind it (less preferred) or a belt on the opposite side feeding into the other lane of the center belt. 
 - **Sideloading into an underground** passes only the lane on the open side; the hood blocks the other half. Chris's blueprints use this on purpose to merge one lane into a tunnel while the other lane carries on (it's also in blueprint-tools/CLAUDE.md). Don't "fix" it.
 - **Merge two belts of the same item with a splitter, not a sideload** (Chris fixed this at the base's iron input). A sideload crams the second belt onto one lane, which caps it at half a belt and leaves the source drills backed up. A splitter with both belts as inputs balances the two across its outputs, using both lanes. For the north and south iron belts into the base's iron line, feed both into a splitter's two inputs.
 - **Splitters** keep lanes and split each lane separately. A splitter facing a belt's side sideloads.
 - **Lane plans are part of the design.** On 2026-11-24 the outpost links swapped the mall belt's lanes (iron west, copper east) while old plates still sat on it, and Chris had to clear it by hand. Before changing which side feeds a belt, warn first and plan the cleanup.
-- **Undergrounds (Chris's style):** one pair per crossing at full reach (yellow 4, red 6, blue 8, turbo 10 tiles between). Go under at belt intersections for breathing room. Don't chain short pairs.
+- **Undergrounds (Chris's style):** one pair per crossing at full reach (yellow 4, red 6, blue 8, turbo 10 tiles between). Go under at belt intersections for breathing room. Don't chain short pairs when they can cover a gap. 
 
 ## Placement and ghosts
 
@@ -28,7 +28,7 @@ Things learned while building with Claude Companion, from mistakes and from stud
 - **Always run a dead-end lint before placing a route.** A dry-run `check` only compares the world against the plan, so a tile missing from the plan passes. The copper route shipped with a one-tile gap (an off-by-one `range`). `route.py` now refuses routes with dead ends.
 - **Belts need no power; pole lines along a route only carry power to its far end.** Two parallel routes share one pole line, split where they diverge. Laying a line per route doubled the poles down the shared corridor (Chris caught it). `route.py` now reuses existing poles near the path.
 - **The router's "never take a belt's output" rule must exempt the route's own start.** The start tile is meant to receive the source belt's items. It only worked while the source was still a ghost (ghosts don't count as feeding); once built, every route from it came back "no route found". Found by flood-filling and splitting the route into halves.
-- **Respect what Chris planted.** The fastest path ran straight down his tree avenue. Pass `--avoid x1,y1,x2,y2` for planted or decorative areas before routing.
+- **`--avoid x1,y1,x2,y2` keeps a route out of an area.** First used to route around a tree avenue, which turned out to be only a planting trial, so Chris didn't mind either way. Use it when an area genuinely matters.
 - **Pole lines must check reach at corners.** "A pole every 6 tiles, beside the belt" let a corner's side offset stretch one gap to 8.6 tiles, over the 7.5 reach, which would have left the coal strip unpowered. `route.py` now measures every gap.
 - **Assemblers don't accept science packs,** so science assemblers can't be chained. Each needs its own inserter into a lab.
 - **Non-rotatable entities report facing north.** A rotated plan gives an assembler or pole another facing, so "same entity here?" must ignore facing for poles, chests, lamps, labs, furnaces and assemblers without fluid boxes, or a built machine looks like it blocks its own spot. (Assemblers count as rotatable because of fluid recipes, so `supports_direction` alone isn't enough.)
