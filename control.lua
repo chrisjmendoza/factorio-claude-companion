@@ -1284,3 +1284,318 @@ script.on_event(defines.events.on_research_finished, function(event)
 	if event.by_script then return end
 	to_claude { kind = "research", name = event.research.name }
 end)
+
+---------------------------------------------------------------------------
+-- Claude's own character: a player-less character driven by a job queue.
+--
+-- It plays by the same rules as a player: it walks (game pathfinding), only
+-- builds, refuels or crafts with items it carries, and must be within reach.
+-- Jobs (agent_jobs {jobs = {...}, replace = bool}):
+--   {type = "walk", to = {x, y}}
+--   {type = "take", from = {x, y}, item = name, count = n?}   from a chest/machine
+--   {type = "put", to = {x, y}, item = name, count = n?}
+--   {type = "build", area = box}        revive every ghost in the box it has items for
+--   {type = "refuel", area = box, fuel = "coal", per = 5}   top up burners
+--   {type = "craft", recipe = name, count = n}
+--   {type = "say", text = "..."}
+-- Every finished or failed job is reported to Claude through the chat file.
+
+local AGENT_REACH = 8
+local AGENT_COLOR = { r = 1.0, g = 0.85, b = 0.6 }
+
+local function agent_state()
+	storage.agent = storage.agent or { jobs = {} }
+	return storage.agent
+end
+
+local function agent_char()
+	local a = agent_state()
+	if a.char and a.char.valid then return a.char end
+	return nil
+end
+
+local function agent_report(kind, job, extra)
+	local rec = { kind = "agent", event = kind, job = job and job.type or nil }
+	for k, v in pairs(extra or {}) do rec[k] = v end
+	to_claude(rec)
+end
+
+local function dist(a, b)
+	local dx, dy = a.x - b.x, a.y - b.y
+	return math.sqrt(dx * dx + dy * dy)
+end
+
+-- atan2 sector order: east, southeast, south, ... (y grows south)
+local DIR8 = {
+	defines.direction.east, defines.direction.southeast, defines.direction.south, defines.direction.southwest,
+	defines.direction.west, defines.direction.northwest, defines.direction.north, defines.direction.northeast,
+}
+
+local function stop_walking(c)
+	c.walking_state = { walking = false, direction = defines.direction.north }
+end
+
+-- Moves the character toward `goal`. Returns true once within `within`.
+local function goto_step(a, c, goal, within)
+	if dist(c.position, goal) <= within then
+		stop_walking(c)
+		a.path, a.path_req, a.path_goal = nil, nil, nil
+		return true
+	end
+	local same_goal = a.path_goal and a.path_goal.x == goal.x and a.path_goal.y == goal.y
+	if not same_goal then a.path, a.path_req, a.path_goal, a.path_fail = nil, nil, goal, nil end
+	if not a.path then
+		if not a.path_req then
+			local proto = prototypes.entity["character"]
+			a.path_req = c.surface.request_path {
+				bounding_box = proto.collision_box, collision_mask = proto.collision_mask,
+				start = c.position, goal = goal, force = c.force, radius = math.max(within - 0.5, 0.5),
+				entity_to_ignore = c, pathfind_flags = { cache = false, prefer_straight_paths = true },
+			}
+		end
+		stop_walking(c)
+		return false
+	end
+	local wp = a.path[a.wp]
+	if not wp then
+		a.path = nil -- ran out of waypoints short of the goal: path again
+		return false
+	end
+	local p = c.position
+	local dx, dy = wp.position.x - p.x, wp.position.y - p.y
+	if dx * dx + dy * dy < 0.09 then
+		a.wp = a.wp + 1
+		return false
+	end
+	local i = math.floor((math.atan2(dy, dx) / (2 * math.pi)) * 8 + 0.5) % 8
+	c.walking_state = { walking = true, direction = DIR8[i + 1] }
+	-- stuck check: no progress for 2 seconds -> re-path
+	a.stuck = a.stuck or { pos = p, tick = game.tick }
+	if dist(a.stuck.pos, p) > 0.5 then
+		a.stuck = { pos = p, tick = game.tick }
+	elseif game.tick - a.stuck.tick > 120 then
+		a.path, a.path_req, a.stuck = nil, nil, nil
+	end
+	return false
+end
+
+script.on_event(defines.events.on_script_path_request_finished, function(event)
+	local a = storage.agent
+	if not (a and a.path_req == event.id) then return end
+	a.path_req = nil
+	if event.path then
+		a.path, a.wp = event.path, 1
+	else
+		a.path_fail = (a.path_fail or 0) + 1
+		if event.try_again_later then return end
+		if a.path_fail >= 3 then
+			local job = a.jobs[1]
+			a.path_goal, a.path_fail = nil, nil
+			if job and job.todo and a.target_bi then
+				-- build/refuel: give up on this one target, keep the job
+				job.todo[a.target_bi] = nil
+				job.unreachable = (job.unreachable or 0) + 1
+			else
+				table.remove(a.jobs, 1)
+				agent_report("failed", job, { reason = "no path" })
+			end
+		end
+	end
+end)
+
+local function entity_at_pos(c, pos)
+	local found = c.surface.find_entities_filtered { position = pos_of(pos), radius = 0.6, force = c.force }
+	for _, e in pairs(found) do
+		if e ~= c and e.type ~= "entity-ghost" then return e end
+	end
+end
+
+local function item_inventories(e)
+	local out = {}
+	for _, id in pairs({ defines.inventory.chest, defines.inventory.furnace_result, defines.inventory.assembling_machine_output,
+		defines.inventory.fuel, defines.inventory.furnace_source }) do
+		local ok, inv = pcall(e.get_inventory, id)
+		if ok and inv then out[#out + 1] = inv end
+	end
+	return out
+end
+
+-- One step of the current job. Returns "done", "failed" (with extra info) or nil.
+local function job_step(a, c, job)
+	local inv = c.get_main_inventory()
+	if job.type == "walk" then
+		return goto_step(a, c, pos_of(job.to), job.within or 1.5) and "done" or nil
+
+	elseif job.type == "say" then
+		say(job.text or "")
+		return "done"
+
+	elseif job.type == "craft" then
+		local ok, n = pcall(c.begin_crafting, { recipe = job.recipe, count = job.count or 1, silent = true })
+		if ok and n and n > 0 then return "done", { queued = n } end
+		return "failed", { reason = "cannot craft " .. tostring(job.recipe) }
+
+	elseif job.type == "take" or job.type == "put" then
+		local target = pos_of(job.type == "take" and job.from or job.to)
+		if not goto_step(a, c, target, AGENT_REACH) then return nil end
+		local e = entity_at_pos(c, target)
+		if not e then return "failed", { reason = "nothing at target" } end
+		local moved = 0
+		if job.type == "take" then
+			for _, src in pairs(item_inventories(e)) do
+				local here = src.get_item_count(job.item)
+				local want = job.count and (job.count - moved) or here
+				if want > 0 and here > 0 then
+					local got = src.remove { name = job.item, count = math.min(want, here) }
+					local put = got > 0 and inv.insert { name = job.item, count = got } or 0
+					if put < got then src.insert { name = job.item, count = got - put } end
+					moved = moved + put
+				end
+			end
+		else
+			local have = inv.get_item_count(job.item)
+			local n = math.min(job.count or have, have)
+			if n > 0 then
+				local ins = e.insert { name = job.item, count = n }
+				if ins > 0 then inv.remove { name = job.item, count = ins } end
+				moved = ins
+			end
+		end
+		return "done", { item = job.item, moved = moved }
+
+	elseif job.type == "build" or job.type == "refuel" then
+		if not job.todo then
+			job.todo, job.made, job.skipped = {}, 0, {}
+			if job.type == "build" then
+				for _, g in pairs(c.surface.find_entities_filtered { area = job.area, type = "entity-ghost", force = c.force }) do
+					job.todo[#job.todo + 1] = g
+				end
+			else
+				for _, e in pairs(c.surface.find_entities_filtered { area = job.area, force = c.force }) do
+					if e.type ~= "character" and e.burner then job.todo[#job.todo + 1] = e end
+				end
+			end
+		end
+		-- keep the current target until it's handled; otherwise the nearest valid one
+		local best, bi
+		if a.target_bi and job.todo[a.target_bi] and job.todo[a.target_bi].valid then
+			bi, best = a.target_bi, 0
+		end
+		for i, t in pairs(bi and {} or job.todo) do
+			if t.valid then
+				local d = dist(c.position, t.position)
+				if not best or d < best then best, bi = d, i end
+			else
+				job.todo[i] = nil
+			end
+		end
+		if not bi then
+			a.target_bi = nil
+			return "done", { made = job.made, missing = job.skipped, unreachable = job.unreachable }
+		end
+		a.target_bi = bi
+		local t = job.todo[bi]
+		if job.type == "build" then
+			local items = t.ghost_prototype.items_to_place_this
+			local need = items and items[1]
+			local count = need and (need.count or 1) or 1
+			if not need or inv.get_item_count(need.name) < count then
+				if need then job.skipped[need.name] = (job.skipped[need.name] or 0) + count end
+				job.todo[bi] = nil
+				return nil
+			end
+			if not goto_step(a, c, t.position, AGENT_REACH) then return nil end
+			local _, built = t.revive { raise_revive = true }
+			if built then
+				inv.remove { name = need.name, count = count }
+				job.made = job.made + 1
+			end
+			job.todo[bi] = nil
+		else
+			local fuel, per = job.fuel or "coal", job.per or 5
+			local finv = t.get_fuel_inventory()
+			local short = finv and (per - finv.get_item_count(fuel)) or 0
+			if short <= 0 then
+				job.todo[bi] = nil
+				return nil
+			end
+			if inv.get_item_count(fuel) < 1 then
+				return "done", { made = job.made, reason = "out of " .. fuel }
+			end
+			if not goto_step(a, c, t.position, AGENT_REACH) then return nil end
+			local n = finv.insert { name = fuel, count = math.min(short, inv.get_item_count(fuel)) }
+			if n > 0 then inv.remove { name = fuel, count = n } end
+			job.made = job.made + 1
+			job.todo[bi] = nil
+		end
+		return nil
+	end
+	return "failed", { reason = "unknown job type " .. tostring(job.type) }
+end
+
+script.on_nth_tick(1, function()
+	local a = storage.agent
+	if not (a and a.jobs and a.jobs[1]) then return end
+	local c = agent_char()
+	if not c then return end
+	local job = a.jobs[1]
+	local ok, status, extra = pcall(job_step, a, c, job)
+	if not ok then status, extra = "failed", { reason = tostring(status) } end
+	if status then
+		table.remove(a.jobs, 1)
+		a.path, a.path_req, a.path_goal, a.stuck, a.target_bi = nil, nil, nil, nil, nil
+		stop_walking(c)
+		extra = extra or {}
+		extra.left = #a.jobs
+		agent_report(status, job, extra)
+	end
+end)
+
+function handlers.agent_spawn(args)
+	local a = agent_state()
+	local c = agent_char()
+	if c then return { exists = true, position = c.position } end
+	local surface = surface_of(args)
+	local p = player_of(args)
+	local want = pos_of(args.position) or (p and p.position) or { x = 0, y = 0 }
+	local pos = surface.find_non_colliding_position("character", want, 30, 0.5)
+	if not pos then error("no room for a character near " .. want.x .. "," .. want.y) end
+	c = surface.create_entity { name = "character", position = pos, force = force_of(args) }
+	c.color = AGENT_COLOR
+	a.char = c
+	pcall(function()
+		a.label = rendering.draw_text { text = "Claude", surface = surface, target = { entity = c, offset = { 0, -2.6 } },
+			color = AGENT_COLOR, scale = 1.3, alignment = "center" }
+	end)
+	say("I'm here! [gps=" .. math.floor(pos.x) .. "," .. math.floor(pos.y) .. "]")
+	return { spawned = true, position = pos }
+end
+
+function handlers.agent_jobs(args)
+	local a = agent_state()
+	if not agent_char() then error("no agent: call agent_spawn first") end
+	if args.replace then
+		a.jobs, a.path, a.path_req, a.path_goal = {}, nil, nil, nil
+	end
+	for _, j in ipairs(args.jobs or {}) do a.jobs[#a.jobs + 1] = j end
+	return { queued = #a.jobs }
+end
+
+function handlers.agent_status()
+	local a = agent_state()
+	local c = agent_char()
+	if not c then return { alive = false } end
+	local items = {}
+	for _, s in pairs(c.get_main_inventory().get_contents()) do items[s.name] = (items[s.name] or 0) + s.count end
+	local job = a.jobs[1]
+	return { alive = true, position = c.position, job = job and job.type, queued = #a.jobs,
+		walking = c.walking_state.walking, crafting = c.crafting_queue_size, inventory = items }
+end
+
+function handlers.agent_stop()
+	local a = agent_state()
+	a.jobs, a.path, a.path_req, a.path_goal = {}, nil, nil, nil
+	local c = agent_char()
+	if c then stop_walking(c) end
+	return { stopped = true }
+end
