@@ -1517,7 +1517,9 @@ local function job_step(a, c, job)
 		return "done"
 
 	elseif job.type == "craft" then
-		local ok, n = pcall(c.begin_crafting, { recipe = job.recipe, count = job.count or 1, silent = true })
+		local can = c.get_craftable_count(job.recipe)
+		if can < 1 then return "failed", { reason = "missing ingredients for " .. tostring(job.recipe) } end
+		local ok, n = pcall(c.begin_crafting, { recipe = job.recipe, count = math.min(job.count or 1, can), silent = true })
 		if ok and n and n > 0 then return "done", { queued = n } end
 		return "failed", { reason = "cannot craft " .. tostring(job.recipe) }
 
@@ -1636,6 +1638,115 @@ local function job_step(a, c, job)
 			job.todo[bi] = nil
 		end
 		return nil
+	elseif job.type == "mine" then
+		-- Hand mining at the character's real speed and reach. Targets, nearest
+		-- first, within `radius` of `at` (default: around the character):
+		--   kind = "resource" (default; `name` = "iron-ore", "coal", ...),
+		--   "tree", "rock", or "entity" (pick up our own buildings, `name` optional).
+		-- Stops after `count` items of the main product, or when nothing is left.
+		local kind = job.kind or "resource"
+		-- an unnamed "entity" job would pick up every building of ours in range
+		if kind == "entity" and not job.name then
+			return "failed", { reason = "mine kind=entity needs a name" }
+		end
+		local center = pos_of(job.at) or c.position
+		job.got = job.got or 0
+		if job.count and job.got >= job.count then return "done", { got = job.got } end
+		local t = job.target
+		if not (t and t.valid) then
+			job.target, job.progress = nil, 0
+			local filter = { position = center, radius = job.radius or 24 }
+			if kind == "resource" then filter.type = "resource"; filter.name = job.name
+			elseif kind == "tree" then filter.type = "tree"
+			elseif kind == "rock" then filter.type = "simple-entity"
+			else filter.force = c.force; filter.name = job.name end
+			local best, bd
+			for _, e in pairs(c.surface.find_entities_filtered(filter)) do
+				local mp = e.prototype.mineable_properties
+				local ok = mp and mp.minable and e ~= c and e.type ~= "character" and e.type ~= "entity-ghost"
+				-- a player can't hand-mine oil, or ore that needs a fluid (uranium)
+				if ok and kind == "resource" and (e.prototype.infinite_resource or mp.required_fluid) then
+					ok = false
+					job.skipped_fluid = job.skipped_fluid or (mp.required_fluid and true) or nil
+				end
+				if ok then
+					local d = dist(c.position, e.position)
+					if not bd or d < bd then best, bd = e, d end
+				end
+			end
+			if not best then
+				if job.skipped_fluid and job.got == 0 then
+					return "failed", { reason = "cannot hand-mine " .. tostring(job.name or "this ore") .. ": it needs a fluid" }
+				end
+				return "done", { got = job.got, reason = "nothing left to mine" }
+			end
+			job.target, t = best, best
+		end
+		local ok_reach, reach = pcall(function() return c.resource_reach_distance end)
+		reach = (ok_reach and reach) or 2.7
+		if kind ~= "resource" then
+			local ok_r, r = pcall(function() return c.reach_distance end)
+			reach = math.min((ok_r and r) or 10, AGENT_REACH)
+		end
+		if not goto_step(a, c, t.position, reach - 0.3) then return nil end
+		local mp = t.prototype.mineable_properties
+		local function num(f, d) local ok, v = pcall(f); return (ok and type(v) == "number") and v or d end
+		local speed = num(function() return c.prototype.mining_speed end, 0.5)
+			* (1 + num(function() return c.force.manual_mining_speed_modifier end, 0)
+				+ num(function() return c.character_mining_speed_modifier end, 0))
+		job.progress = (job.progress or 0) + speed / 60
+		if job.progress < (mp.mining_time or 1) then return nil end
+		job.progress = 0
+		-- the item we count: the named one, else the first product
+		local main = job.item or (mp.products and mp.products[1] and mp.products[1].name)
+		local before = main and inv.get_item_count(main) or 0
+		if kind == "resource" then
+			for _, p in pairs(mp.products or {}) do
+				if p.type == "item" and (not p.probability or math.random() < p.probability) then
+					local n = p.amount or math.random(p.amount_min or 1, p.amount_max or 1)
+					if n > 0 then
+						if not inv.can_insert { name = p.name, count = n } then
+							return "done", { got = job.got, reason = "inventory full" }
+						end
+						inv.insert { name = p.name, count = n }
+					end
+				end
+			end
+			if t.amount <= 1 then t.deplete() else t.amount = t.amount - 1 end
+		else
+			local done = t.mine { inventory = inv, force = false, raise_destroyed = true, ignore_minable = false }
+			if not done then return "done", { got = job.got, reason = "inventory full" } end
+			job.target = nil
+		end
+		job.got = job.got + (main and (inv.get_item_count(main) - before) or 1)
+		if job.count and job.got >= job.count then return "done", { got = job.got } end
+		return nil
+
+	elseif job.type == "pickup" then
+		-- items lying on the ground within `radius` of `at`
+		local center = pos_of(job.at) or c.position
+		local items = c.surface.find_entities_filtered { position = center, radius = job.radius or 10, type = "item-entity" }
+		local best, bd
+		for _, e in pairs(items) do
+			local d = dist(c.position, e.position)
+			if not bd or d < bd then best, bd = e, d end
+		end
+		if not best then return "done", { got = job.got or 0 } end
+		if not goto_step(a, c, best.position, 1.2) then return nil end
+		local st = best.stack
+		local n = inv.insert(st)
+		if n <= 0 then return "done", { got = job.got or 0, reason = "inventory full" } end
+		if n >= st.count then best.destroy() else st.count = st.count - n end
+		job.got = (job.got or 0) + n
+		return nil
+
+	elseif job.type == "wait" then
+		-- `ticks` to wait, or `craft = true` to wait until the crafting queue is empty
+		job.until_tick = job.until_tick or (game.tick + (job.ticks or 0))
+		if job.craft and c.crafting_queue_size > 0 then return nil end
+		if game.tick < job.until_tick then return nil end
+		return "done"
+
 	end
 	return "failed", { reason = "unknown job type " .. tostring(job.type) }
 end
@@ -1718,7 +1829,7 @@ function handlers.agent_status()
 	local items = {}
 	for _, s in pairs(c.get_main_inventory().get_contents()) do items[s.name] = (items[s.name] or 0) + s.count end
 	local job = a.jobs[1]
-	return { alive = true, position = c.position, job = job and job.type, queued = #a.jobs,
+	return { alive = true, position = c.position, job = job and job.type, job_got = job and job.got, queued = #a.jobs,
 		walking = c.walking_state.walking, crafting = c.crafting_queue_size, inventory = items }
 end
 

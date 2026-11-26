@@ -1,4 +1,18 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.2.5
+Date: 2026-11-25
+  Bugfixes:
+    - The agent's mine job no longer picks up every building in range when kind is "entity" and no name is given: it now fails and asks for a name.
+    - The agent can no longer hand-mine ore that needs a fluid (uranium), which a player can't do either.
+---------------------------------------------------------------------------------------------------
+Version: 0.2.4
+Date: 2026-11-25
+  Features:
+    - Claude's character can mine by hand: ore, trees, rocks, and its own buildings, at the character's real mining speed and reach. No cheats: it gets exactly what a player would.
+    - New agent jobs: pickup (items lying on the ground) and wait (a number of ticks, or until crafting finishes).
+  Changes:
+    - The agent's craft job queues only what it has ingredients for, and fails clearly when it has none.
+---------------------------------------------------------------------------------------------------
 Version: 0.2.3
 Date: 2026-11-24
   Changes:
