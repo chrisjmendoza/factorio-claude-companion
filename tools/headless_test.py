@@ -106,6 +106,21 @@ def last_report(job):
     return found
 
 
+def chat_records(kind):
+    """Every record of one kind from the headless chat file."""
+    path = os.path.join(WORK, "script-output", "claude-companion", "chat.jsonl")
+    out = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if rec.get("kind") == kind:
+                out.append(rec)
+    return out
+
+
 def main():
     exe = find_factorio()
     print("factorio:", exe)
@@ -295,6 +310,89 @@ def main():
         results["craft_stats"] = (prod["wooden-chest"]["made_total"] == 1 and prod["transport-belt"]["made_total"] == 2
                                   and prod["iron-gear-wheel"]["made_total"] == 2 and prod["iron-gear-wheel"]["used_total"] == 2)
         results["mine_stats"] = prod["iron-ore"]["made_total"] == 12 and prod["wood"]["made_total"] >= 8
+
+        # 4k) a job that does nothing must say so
+        cc.call("agent_jobs", {"jobs": [{"type": "take", "from": [fx, fy], "item": "copper-plate"}]}, port=PORT)
+        agent_wait(30)
+        t = last_report("take")
+        results["warn_on_nothing"] = bool(t) and t.get("warn") is True and t.get("moved") == 0 and bool(t.get("reason"))
+        print("empty take:", t)
+
+        # 4l) area_status names statuses; research_triggers lists the lab trigger.
+        # A second furnace with stone but no fuel gives a known "no_fuel" to find.
+        around = [[fx - 6, fy - 6], [fx + 6, fy + 6]]
+        f2 = [fx, fy - 3]
+        cc.call("agent_jobs", {"jobs": [{"type": "craft", "recipe": "stone-furnace", "count": 1, "wait": True}]}, port=PORT)
+        agent_wait(30)
+        print("place:", cc.call("place", {"entities": [{"name": "stone-furnace", "position": f2}]}, port=PORT))
+        cc.call("agent_jobs", {"jobs": [{"type": "build", "area": [[fx - 2, fy - 5], [fx + 2, fy - 1.5]]},
+                                        {"type": "put", "to": f2, "item": "stone", "count": 2},
+                                        {"type": "wait", "ticks": 400}]}, port=PORT)
+        agent_wait(40)
+        status = cc.call("area_status", {"area": around}, port=PORT)
+        print("area_status:", status["counts"], status["not_working"])
+        names = [k for row in status["counts"].values() for k in row]
+        results["area_status"] = ("stone-furnace" in status["counts"] and bool(names)
+                                  and not any(n.isdigit() for n in names)
+                                  and any(r["n"] == "stone-furnace" and r["s"] == "no_fuel" for r in status["not_working"]))
+        trig = {r["tech"]: r for r in cc.call("research_triggers", {}, port=PORT)["triggers"]}
+        lab = trig.get("automation-science-pack", {})
+        steam = trig.get("steam-power", {})
+        results["research_triggers"] = (lab.get("item") == "lab" and lab.get("ready") is False
+                                        and steam.get("item") == "iron-plate" and steam.get("count") == 50
+                                        and steam.get("made") == 12)
+        print("triggers:", lab, steam)
+
+        # 4m) alerts reach the chat file without being asked for
+        alerts = chat_records("alert")
+        whats = {r.get("what") for r in alerts}
+        results["alerts"] = "no_fuel" in whats and "job_failed" in whats
+        print("alerts so far:", sorted(w for w in whats if w))
+
+        # 4n) craft that waits for its own result
+        cc.call("agent_jobs", {"jobs": [{"type": "craft", "recipe": "wooden-chest", "count": 1, "wait": True}]}, port=PORT)
+        st = agent_wait(30)
+        cr = last_report("craft")
+        results["craft_wait_flag"] = bool(cr) and cr.get("crafted") is True and st["crafting"] == 0
+
+        # 4o) refuel shares a short supply: three burners each want 40 wood and there is less
+        # than that between them, so all three must get some instead of the first taking it all
+        wood = st["inventory"].get("wood", 0)
+        cc.call("agent_jobs", {"jobs": [{"type": "refuel", "area": around, "fuel": "wood", "target": 40}]}, port=PORT)
+        st = agent_wait(40)
+        rf = last_report("refuel")
+        results["refuel_shares"] = (bool(rf) and rf.get("burners") == 3 and rf.get("shared") is True and rf.get("made") == 3
+                                    and 3 <= wood < 120 and rf.get("fuel_used") == wood
+                                    and st["inventory"].get("wood", 0) == 0)
+        print("refuel:", rf, "wood before:", wood)
+
+        # 4p) collect from building outputs
+        cc.call("agent_jobs", {"jobs": [{"type": "put", "to": [fx, fy], "item": "stone", "count": 4},
+                                        {"type": "wait", "ticks": 500},
+                                        {"type": "collect", "area": around, "item": "stone-brick"}]}, port=PORT)
+        st = agent_wait(60)
+        co = last_report("collect")
+        results["collect"] = bool(co) and co.get("moved", 0) >= 2 and co.get("from", 0) >= 1
+        print("collect:", co)
+
+        # 4q) a repeat runs its jobs on a timer, quietly, and stops after `times`
+        waits = len([r for r in chat_records("agent") if r.get("job") == "wait"])
+        cc.call("agent_jobs", {"jobs": [{"type": "repeat", "every_ticks": 120, "times": 2,
+                                         "jobs": [{"type": "wait", "ticks": 10}]}]}, port=PORT)
+        time.sleep(1.5)
+        mid = cc.call("agent_status", {}, port=PORT)
+        time.sleep(5)
+        end = cc.call("agent_status", {}, port=PORT)
+        rp = last_report("repeat")
+        waits2 = len([r for r in chat_records("agent") if r.get("job") == "wait"])
+        results["repeat"] = (bool(rp) and rp.get("id") == 1 and bool(mid.get("repeats")) and not end.get("repeats")
+                             and waits2 == waits and end.get("free_slots", 0) > 0)
+        print("repeat:", rp, "mid:", mid.get("repeats"), "end:", end.get("repeats"))
+
+        # 4r) the character's robots can be held back
+        off = cc.call("agent_bots", {"enabled": False}, port=PORT)
+        on = cc.call("agent_bots", {"enabled": True}, port=PORT)
+        results["agent_bots"] = off.get("enabled") is False and on.get("enabled") is True
 
         # 4j) --research: craft a lab by hand; that must research automation-science-pack (several minutes)
         if "--research" in sys.argv:

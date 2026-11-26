@@ -94,6 +94,23 @@ local function area_of(args, default_radius, max_radius)
 	return { { math.floor(c.x - r), math.floor(c.y - r) }, { math.floor(c.x + r) + 1, math.floor(c.y + r) + 1 } }
 end
 
+-- defines.entity_status by number, so statuses can be reported by name
+local STATUS_NAME = {}
+for name, id in pairs(defines.entity_status) do STATUS_NAME[id] = name end
+
+local function status_name(e)
+	local ok, st = pcall(function() return e.status end)
+	if not (ok and st) then return nil end
+	return STATUS_NAME[st] or tostring(st)
+end
+
+local function deepcopy(t)
+	if type(t) ~= "table" then return t end
+	local out = {}
+	for k, v in pairs(t) do out[k] = deepcopy(v) end
+	return out
+end
+
 local function round(v, places)
 	local m = 10 ^ (places or 2)
 	return math.floor(v * m + 0.5) / m
@@ -399,7 +416,7 @@ function handlers.scan(args)
 			row.t = e.belt_to_ground_type
 		end
 		if e.type == "mining-drill" and e.status then
-			row.s = e.status
+			row.s = status_name(e)
 		end
 		out[#out + 1] = row
 	end
@@ -407,6 +424,29 @@ function handlers.scan(args)
 	nature.rock = surface.count_entities_filtered { area = area, type = "simple-entity" }
 	nature.cliff = surface.count_entities_filtered { area = area, type = "cliff" }
 	return { area = area, entities = out, truncated = #out >= limit, nature = nature }
+end
+
+-- Statuses that mean "fine", so area_status lists only what needs a look.
+local OK_STATUS = { working = true, normal = true, charging = true, discharging = true, fully_charged = true,
+	networks_connected = true }
+
+-- {area} or {center, radius}: how our buildings there are doing. `counts` is
+-- status by entity name; `not_working` lists the ones that aren't fine.
+function handlers.area_status(args)
+	local surface, force = surface_of(args), force_of(args)
+	local area = area_of(args, 32, 200)
+	local counts, bad, limit = {}, {}, args.limit or 200
+	for _, e in pairs(surface.find_entities_filtered { area = area, force = force }) do
+		local st = e.type ~= "entity-ghost" and e.type ~= "character" and status_name(e)
+		if st then
+			counts[e.name] = counts[e.name] or {}
+			counts[e.name][st] = (counts[e.name][st] or 0) + 1
+			if not OK_STATUS[st] and #bad < limit then
+				bad[#bad + 1] = { n = e.name, x = e.position.x, y = e.position.y, s = st }
+			end
+		end
+	end
+	return { area = area, counts = counts, not_working = bad }
 end
 
 -- Ore patches near a point, as connected groups.
@@ -1364,8 +1404,9 @@ script.on_event(defines.events.on_player_joined_game, function(event)
 end)
 
 script.on_event(defines.events.on_research_finished, function(event)
-	if event.by_script then return end
-	to_claude { kind = "research", name = event.research.name }
+	if not event.by_script then to_claude { kind = "research", name = event.research.name } end
+	local queue = event.research.force.research_queue
+	if not queue or #queue == 0 then to_claude { kind = "alert", what = "research_queue_empty" } end
 end)
 
 ---------------------------------------------------------------------------
@@ -1387,6 +1428,9 @@ end)
 --   {type = "pickup", at?, radius?}     items lying on the ground
 --   {type = "rotate", at = {x, y}, direction = n?}
 --   {type = "wait", ticks = n} or {type = "wait", craft = true}
+--   {type = "collect", area = box, item = name?, count = n?}   from building outputs
+--   {type = "repeat", every_ticks = n, jobs = {...}, times = k?}
+-- craft takes wait = true; refuel takes target = n and shares a short supply.
 -- put also feeds a belt; build also lays tile ghosts (landfill) and clears
 -- trees and rocks marked for deconstruction under a ghost.
 -- Every finished or failed job is reported to Claude through the chat file.
@@ -1662,10 +1706,20 @@ local function job_step(a, c, job)
 		return "done"
 
 	elseif job.type == "craft" then
+		if job.queued then -- wait = true: stay until the crafting is finished
+			if c.crafting_queue_size > 0 then return nil end
+			return "done", { queued = job.queued, crafted = true }
+		end
 		local can = c.get_craftable_count(job.recipe)
 		if can < 1 then return "failed", { reason = "missing ingredients for " .. tostring(job.recipe) } end
 		local ok, n = pcall(c.begin_crafting, { recipe = job.recipe, count = math.min(job.count or 1, can), silent = true })
-		if ok and n and n > 0 then return "done", { queued = n } end
+		if ok and n and n > 0 then
+			if job.wait then
+				job.queued = n
+				return nil
+			end
+			return "done", { queued = n }
+		end
 		return "failed", { reason = "cannot craft " .. tostring(job.recipe) }
 
 	elseif job.type == "take" or job.type == "put" then
@@ -1744,6 +1798,39 @@ local function job_step(a, c, job)
 				for _, e in pairs(c.surface.find_entities_filtered { area = job.area, force = c.force }) do
 					if e.type ~= "character" and e.burner then job.todo[#job.todo + 1] = e end
 				end
+				-- How much each burner gets. With enough fuel, each is topped up to
+				-- `target`; with too little, all are levelled up to the same amount
+				-- instead of the first few taking everything.
+				local fuel, target = job.fuel or "coal", job.target or job.per or 5
+				local have, short = {}, 0
+				for i, e in pairs(job.todo) do
+					local finv = e.get_fuel_inventory()
+					have[i] = finv and finv.get_item_count(fuel) or target
+					short = short + math.max(0, target - have[i])
+				end
+				local budget, level = inv.get_item_count(fuel), target
+				if budget < short then
+					level, job.shared = 0, true
+					for l = 1, target do
+						local cost = 0
+						for _, h in pairs(have) do cost = cost + math.max(0, l - h) end
+						if cost > budget then break end
+						level = l
+					end
+				end
+				job.give, job.burners, job.used = {}, #job.todo, 0
+				local left = budget
+				for i, h in pairs(have) do
+					job.give[i] = math.max(0, level - h)
+					left = left - job.give[i]
+				end
+				if job.shared then -- the remainder, one each
+					for i, h in pairs(have) do
+						if left > 0 and h + job.give[i] < target then
+							job.give[i], left = job.give[i] + 1, left - 1
+						end
+					end
+				end
 			end
 		end
 		-- keep the current target until it's handled; otherwise the nearest valid one
@@ -1761,7 +1848,8 @@ local function job_step(a, c, job)
 		end
 		if not bi then
 			a.target_bi = nil
-			return "done", { made = job.made, missing = job.skipped, unreachable = job.unreachable, blocked = job.blocked }
+			return "done", { made = job.made, missing = job.skipped, unreachable = job.unreachable, blocked = job.blocked,
+				burners = job.burners, fuel_used = job.used, shared = job.shared }
 		end
 		a.target_bi = bi
 		local t = job.todo[bi]
@@ -1798,20 +1886,22 @@ local function job_step(a, c, job)
 			end
 			job.todo[bi] = nil
 		else
-			local fuel, per = job.fuel or "coal", job.per or 5
+			local fuel = job.fuel or "coal"
 			local finv = t.get_fuel_inventory()
-			local short = finv and (per - finv.get_item_count(fuel)) or 0
+			local short = finv and job.give[bi] or 0
 			if short <= 0 then
 				job.todo[bi] = nil
 				return nil
 			end
 			if inv.get_item_count(fuel) < 1 then
-				return "done", { made = job.made, reason = "out of " .. fuel }
+				return "done", { made = job.made, burners = job.burners, fuel_used = job.used, reason = "out of " .. fuel }
 			end
 			if not goto_step(a, c, t.position, AGENT_REACH) then return nil end
 			local n = finv.insert { name = fuel, count = math.min(short, inv.get_item_count(fuel)) }
-			if n > 0 then inv.remove { name = fuel, count = n } end
-			job.made = job.made + 1
+			if n > 0 then
+				inv.remove { name = fuel, count = n }
+				job.made, job.used = job.made + 1, job.used + n
+			end
 			job.todo[bi] = nil
 		end
 		return nil
@@ -1923,6 +2013,73 @@ local function job_step(a, c, job)
 		job.got = (job.got or 0) + n
 		return nil
 
+	elseif job.type == "collect" then
+		-- take `item` (or everything) from the output of every building in `area`
+		if not job.todo then
+			job.todo, job.moved, job.from = {}, 0, 0
+			for _, e in pairs(c.surface.find_entities_filtered { area = job.area, force = c.force }) do
+				local chest = e.type == "container" or e.type == "logistic-container"
+				if e ~= c and e.type ~= "character" and e.type ~= "entity-ghost" and (job.chests or not chest) then
+					local ok, out = pcall(e.get_output_inventory)
+					if ok and out and not out.is_empty() and (not job.item or out.get_item_count(job.item) > 0) then
+						job.todo[#job.todo + 1] = e
+					end
+				end
+			end
+		end
+		local result = { item = job.item, moved = job.moved, from = job.from }
+		if job.count and job.moved >= job.count then return "done", result end
+		local t, bi, bd
+		for i, e in pairs(job.todo) do
+			if e.valid then
+				local d = dist(c.position, e.position)
+				if not bd or d < bd then t, bi, bd = e, i, d end
+			else
+				job.todo[i] = nil
+			end
+		end
+		if not t then return "done", result end
+		if not goto_step(a, c, t.position, AGENT_REACH) then return nil end
+		local out, took = t.get_output_inventory(), 0
+		for _, st in pairs(out.get_contents()) do
+			if not job.item or st.name == job.item then
+				local want = job.count and math.min(st.count, job.count - job.moved - took) or st.count
+				if want > 0 then
+					local stack = { name = st.name, count = want, quality = st.quality }
+					local put = inv.insert(stack)
+					if put > 0 then
+						stack.count = put
+						out.remove(stack)
+						took = took + put
+					end
+					if put < want then
+						job.moved, job.from = job.moved + took, job.from + 1
+						return "done", { item = job.item, moved = job.moved, from = job.from, reason = "inventory full" }
+					end
+				end
+			end
+		end
+		job.moved = job.moved + took
+		if took > 0 then job.from = job.from + 1 end
+		job.todo[bi] = nil
+		return nil
+
+	elseif job.type == "repeat" then
+		-- {every_ticks = n, jobs = {...}, times = k?}: runs the jobs now and again
+		-- every n ticks until agent_stop. Registers the schedule and moves on, so
+		-- other jobs still run in between.
+		local every = tonumber(job.every_ticks)
+		if not every or every < 60 then return "failed", { reason = "repeat needs every_ticks of 60 or more" } end
+		if type(job.jobs) ~= "table" or #job.jobs == 0 then return "failed", { reason = "repeat needs jobs" } end
+		for _, j in ipairs(job.jobs) do
+			if j.type == "repeat" then return "failed", { reason = "a repeat can't hold another repeat" } end
+		end
+		a.repeats = a.repeats or {}
+		a.repeat_id = (a.repeat_id or 0) + 1
+		a.repeats[#a.repeats + 1] = { id = a.repeat_id, every = every, jobs = job.jobs, times = job.times,
+			runs = 0, next_tick = game.tick }
+		return "done", { id = a.repeat_id, every_ticks = every }
+
 	elseif job.type == "deconstruct" then
 		-- mine by hand everything marked for deconstruction in `area`, nearest first
 		job.got = job.got or 0
@@ -1967,6 +2124,58 @@ local function job_step(a, c, job)
 	return "failed", { reason = "unknown job type " .. tostring(job.type) }
 end
 
+-- A job that finished but did nothing is a warning, not a plain "done":
+-- a take that moved 0 looks just like one that worked otherwise.
+local function add_warning(job, extra)
+	local t, why = job.type, nil
+	if t == "take" or t == "take_belt" or t == "collect" then
+		if (extra.moved or 0) == 0 then why = "nothing to take there" end
+	elseif t == "put" then
+		if (extra.moved or 0) == 0 then why = "nothing was put" end
+	elseif t == "mine" or t == "deconstruct" or t == "pickup" then
+		if (extra.got or 0) == 0 then why = "nothing found" end
+	elseif t == "build" then
+		if (extra.made or 0) == 0 then
+			why = (extra.missing and next(extra.missing) and "missing items") or (extra.blocked and "blocked")
+				or (extra.unreachable and "unreachable") or "no matching ghosts"
+		end
+	elseif t == "refuel" then
+		if (extra.made or 0) == 0 then
+			if extra.burners == 0 then why = "no burners in area"
+			elseif extra.reason then why = extra.reason
+			else extra.reason = "nothing needed fuel" end
+		end
+	end
+	if why then
+		extra.warn = true
+		extra.reason = extra.reason or why
+	end
+end
+
+-- Queues the jobs of every repeat that is due and not still running.
+local function run_repeats(a)
+	for _, r in pairs(a.repeats or {}) do
+		if not r.pending and game.tick >= r.next_tick then
+			for k, j in ipairs(r.jobs) do
+				local copy = deepcopy(j)
+				copy.quiet, copy.repeat_id, copy.repeat_last = true, r.id, k == #r.jobs or nil
+				a.jobs[#a.jobs + 1] = copy
+			end
+			r.pending, r.runs, r.next_tick = true, r.runs + 1, game.tick + r.every
+		end
+	end
+end
+
+local function repeat_round_done(a, id)
+	for i, r in pairs(a.repeats or {}) do
+		if r.id == id then
+			r.pending = nil
+			if r.times and r.runs >= r.times then table.remove(a.repeats, i) end
+			return
+		end
+	end
+end
+
 script.on_nth_tick(1, function()
 	local a = storage.agent
 	if not (a and a.char) then return end
@@ -1978,7 +2187,9 @@ script.on_nth_tick(1, function()
 		a.credit_err = true
 		to_claude { kind = "error", where = "credit_crafting", error = tostring(err) }
 	end
-	local job = a.jobs and a.jobs[1]
+	a.jobs = a.jobs or {}
+	if a.repeats and a.repeats[1] then run_repeats(a) end
+	local job = a.jobs[1]
 	if not job then return end
 	local ok, status, extra = pcall(job_step, a, c, job)
 	if not ok then status, extra = "failed", { reason = tostring(status) } end
@@ -1990,9 +2201,97 @@ script.on_nth_tick(1, function()
 		stop_walking(c)
 		extra = extra or {}
 		extra.left = #a.jobs
-		agent_report(status, job, extra)
+		if status == "done" then add_warning(job, extra) end
+		if job.repeat_last then repeat_round_done(a, job.repeat_id) end
+		-- a repeat's rounds only speak up when something went wrong
+		if not (job.quiet and status == "done" and not extra.warn) then agent_report(status, job, extra) end
+		if status == "failed" then
+			to_claude { kind = "alert", what = "job_failed", job = job.type, reason = extra.reason }
+		end
 	end
 end)
+
+---------------------------------------------------------------------------
+-- Alerts: things going wrong near Claude's character or in a watched area,
+-- written to the chat file so Claude doesn't have to poll for them. An
+-- entity is reported when it goes bad, and again every five minutes while it
+-- stays bad; never more than once a minute.
+
+local ALERT_TYPES = { "mining-drill", "furnace", "assembling-machine", "boiler", "inserter", "lab" }
+local ALERT_RADIUS = 48
+
+local function alert_for(e)
+	local st = status_name(e)
+	if st == "no_fuel" then return "no_fuel" end
+	if e.type == "mining-drill" then
+		if st == "waiting_for_space_in_destination" then return "output_blocked" end
+		if st == "no_minable_resources" then return "no_minable_resources" end
+		local ok, target = pcall(function() return e.drop_target end)
+		if ok and not target then return "dropping_on_ground" end
+	elseif e.type == "furnace" or e.type == "assembling-machine" then
+		if st == "full_output" then return "output_full" end
+	end
+end
+
+script.on_nth_tick(300, function()
+	local a = storage.agent
+	local c = a and a.char and a.char.valid and a.char
+	local areas = {}
+	if c then
+		local p = c.position
+		areas[1] = { surface = c.surface, force = c.force,
+			area = { { p.x - ALERT_RADIUS, p.y - ALERT_RADIUS }, { p.x + ALERT_RADIUS, p.y + ALERT_RADIUS } } }
+	end
+	for _, w in pairs(storage.watched or {}) do
+		local surface, force = game.surfaces[w.surface], game.forces[w.force]
+		if surface and force then areas[#areas + 1] = { surface = surface, force = force, area = w.area } end
+	end
+	if #areas == 0 then return end
+	storage.alerts = storage.alerts or {}
+	local seen, groups, tick = {}, {}, game.tick
+	for _, w in ipairs(areas) do
+		for _, e in pairs(w.surface.find_entities_filtered { area = w.area, force = w.force, type = ALERT_TYPES }) do
+			local id = e.unit_number
+			if id and not seen[id] then
+				seen[id] = true
+				local what, last = alert_for(e), storage.alerts[id]
+				if not what then
+					if last and tick - last.t >= 3600 then storage.alerts[id] = nil elseif last then last.s = nil end
+				elseif not last or (last.s ~= what and tick - last.t >= 3600) or tick - last.t >= 18000 then
+					storage.alerts[id] = { s = what, t = tick }
+					local g = groups[what] or { count = 0, entities = {} }
+					groups[what] = g
+					g.count = g.count + 1
+					if #g.entities < 15 then g.entities[#g.entities + 1] = { n = e.name, x = e.position.x, y = e.position.y } end
+				end
+			end
+		end
+	end
+	for what, g in pairs(groups) do
+		to_claude { kind = "alert", what = what, count = g.count, entities = g.entities }
+	end
+	if c then
+		local free = c.get_main_inventory().count_empty_stacks()
+		if free <= 5 and tick - (a.inv_alert or -3600) >= 3600 then
+			a.inv_alert = tick
+			to_claude { kind = "alert", what = "inventory_nearly_full", free_slots = free }
+		end
+	end
+end)
+
+-- {area} adds an area to watch for alerts (up to 10); {clear = true} forgets them all.
+function handlers.watch(args)
+	storage.watched = storage.watched or {}
+	if args.clear then storage.watched = {} end
+	if args.area then
+		if #storage.watched >= 10 then error("already watching 10 areas; clear some first") end
+		storage.watched[#storage.watched + 1] = { area = area_of(args, 32, 200), surface = surface_of(args).name,
+			force = force_of(args).name }
+	end
+	local out = {}
+	for _, w in ipairs(storage.watched) do out[#out + 1] = w.area end
+	return { watching = out }
+end
 
 -- Tell Claude when its character dies; the queue is dropped with it.
 script.on_event(defines.events.on_entity_died, function(event)
@@ -2046,6 +2345,7 @@ function handlers.agent_spawn(args)
 		a.map_label = rendering.draw_text { text = "Claude", surface = surface, target = { entity = c, offset = { 0, -3 } },
 			color = AGENT_COLOR, scale = 3, alignment = "center", render_mode = "chart" }
 	end)
+	if a.bots_off then c.allow_dispatching_robots = false end
 	point_cameras(c)
 	say("I'm here! [gps=" .. math.floor(pos.x) .. "," .. math.floor(pos.y) .. "]")
 	return { spawned = true, position = pos }
@@ -2056,6 +2356,7 @@ function handlers.agent_jobs(args)
 	if not agent_char() then error("no agent: call agent_spawn first") end
 	if args.replace then
 		a.jobs, a.path, a.path_req, a.path_goal = {}, nil, nil, nil
+		for _, r in pairs(a.repeats or {}) do r.pending = nil end
 	end
 	for _, j in ipairs(args.jobs or {}) do a.jobs[#a.jobs + 1] = j end
 	return { queued = #a.jobs }
@@ -2068,8 +2369,78 @@ function handlers.agent_status()
 	local items = {}
 	for _, s in pairs(c.get_main_inventory().get_contents()) do items[s.name] = (items[s.name] or 0) + s.count end
 	local job = a.jobs[1]
-	return { alive = true, position = c.position, job = job and job.type, job_got = job and job.got, queued = #a.jobs,
-		walking = c.walking_state.walking, crafting = c.crafting_queue_size, inventory = items }
+	local out = { alive = true, position = c.position, job = job and job.type, job_got = job and job.got, queued = #a.jobs,
+		walking = c.walking_state.walking, crafting = c.crafting_queue_size, inventory = items,
+		free_slots = c.get_main_inventory().count_empty_stacks() }
+	if job then
+		-- what the job is working on right now, and how far along it is
+		local t = job.target or job.mining or (job.todo and a.target_bi and job.todo[a.target_bi])
+		-- (a refuel job's `target` is a number: its fuel level, not an entity)
+		if type(t) == "userdata" and t.valid then
+			out.job_target = { n = t.type == "entity-ghost" and t.ghost_name or t.name, x = t.position.x, y = t.position.y }
+		else
+			local spot = pos_of(job.to or job.from or job.at)
+			if spot then out.job_target = { x = spot.x, y = spot.y } end
+		end
+		out.job_done = job.got or job.made or job.moved
+		if job.todo then out.job_todo_left = table_size(job.todo) end
+		if job.progress and job.progress > 0 then out.job_mining_progress = round(job.progress, 2) end
+	end
+	if c.crafting_queue_size > 0 then
+		out.crafting_queue = {}
+		for _, q in pairs(c.crafting_queue) do
+			out.crafting_queue[#out.crafting_queue + 1] = { recipe = q.recipe, count = q.count }
+		end
+	end
+	if a.repeats and a.repeats[1] then
+		out.repeats = {}
+		for _, r in ipairs(a.repeats) do
+			out.repeats[#out.repeats + 1] = { id = r.id, every_ticks = r.every, runs = r.runs,
+				next_in = math.max(0, r.next_tick - game.tick), running = r.pending or false }
+		end
+	end
+	return out
+end
+
+-- Unresearched technologies that unlock by doing something rather than by
+-- science packs, with what they need. `made` is how many the force has made.
+function handlers.research_triggers(args)
+	local force = force_of(args)
+	local stats = force.get_item_production_statistics(surface_of(args))
+	local out = {}
+	for name, tech in pairs(force.technologies) do
+		local trig = tech.enabled and not tech.researched and tech.prototype.research_trigger
+		if trig then
+			local ready = true
+			for _, pre in pairs(tech.prerequisites) do
+				if not pre.researched then ready = false end
+			end
+			local row = { tech = name, type = trig.type, ready = ready }
+			if trig.type == "craft-item" then
+				row.item, row.count = id_name(trig.item), trig.count or 1
+				row.made = row.item and stats.get_input_count(row.item) or nil
+			elseif trig.type == "craft-fluid" then
+				row.fluid, row.amount = trig.fluid, trig.amount
+			else
+				row.entity, row.item = id_name(trig.entity), id_name(trig.item)
+			end
+			out[#out + 1] = row
+		end
+	end
+	return { triggers = out }
+end
+
+-- {enabled = bool}: lets the character's own construction robots work, or
+-- holds them back so it builds its ghosts by hand in the order it's told.
+function handlers.agent_bots(args)
+	local a = agent_state()
+	local c = agent_char()
+	if not c then error("no agent") end
+	if args.enabled ~= nil then
+		a.bots_off = not args.enabled or nil
+		c.allow_dispatching_robots = args.enabled and true or false
+	end
+	return { enabled = c.allow_dispatching_robots }
 end
 
 -- Adds the map marker to an agent spawned before markers existed.
@@ -2138,8 +2509,25 @@ function handlers.agent_unstick()
 	return { moved = p ~= nil, position = c.position }
 end
 
-function handlers.agent_stop()
+-- Clears the queue and every repeat. {keep_repeats = true} keeps the repeats;
+-- {repeat_id = n} stops just that repeat and leaves the rest alone.
+function handlers.agent_stop(args)
 	local a = agent_state()
+	args = args or {}
+	if args.repeat_id then
+		for i, r in pairs(a.repeats or {}) do
+			if r.id == args.repeat_id then table.remove(a.repeats, i) break end
+		end
+		for i = #a.jobs, 2, -1 do
+			if a.jobs[i].repeat_id == args.repeat_id then table.remove(a.jobs, i) end
+		end
+		return { stopped = true, repeat_id = args.repeat_id }
+	end
+	if args.keep_repeats then
+		for _, r in pairs(a.repeats or {}) do r.pending = nil end
+	else
+		a.repeats = nil
+	end
 	a.jobs, a.path, a.path_req, a.path_goal = {}, nil, nil, nil
 	local c = agent_char()
 	if c then stop_walking(c) end

@@ -1,4 +1,16 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.2.10
+Date: 2026-11-25
+  Features:
+    - Alerts are written to the chat file as they happen: a burner out of fuel, a drill that is blocked, dropping on the ground or out of ore, a furnace or assembler with a full output, a failed agent job, a nearly full inventory, an empty research queue. They cover the area around Claude's character and any area added with the new watch command.
+    - New commands: area_status (how the buildings in an area are doing, by status name), research_triggers (technologies that unlock by doing something, and what they need), agent_bots (hold back or release the character's own robots).
+    - New agent jobs: collect (take an item from every building output in an area) and repeat (run a list of jobs on a timer).
+    - The craft job takes wait = true to stay until its crafting is finished. The refuel job takes target, and shares a short fuel supply evenly instead of filling the first few burners.
+    - agent_status reports the current job's target and progress, the crafting queue, free inventory slots and any repeats.
+  Changes:
+    - A job that finishes without doing anything (a take that moved nothing, a build with no ghosts) is reported with warn = true and a reason.
+    - scan reports a drill's status by name instead of by number.
+---------------------------------------------------------------------------------------------------
 Version: 0.2.9
 Date: 2026-11-25
   Bugfixes:

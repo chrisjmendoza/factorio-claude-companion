@@ -43,7 +43,7 @@ nothing extra there.
   the mod answers to the sender's port. Commands: `ping`, `say`, `state`,
   `map`, `scan`, `resources`, `offshore_spots`, `check`, `fit`, `place`,
   `tiles`, `remove_ghosts`, `deconstruct`, `ghosts`, `inventory`, `production`,
-  `research`, `mark`, `clear_marks`, and `lua` (cheats only).
+  `research`, `research_triggers`, `area_status`, `watch`, `mark`, `clear_marks`, and `lua` (cheats only).
 - **Layouts:** `tools/layouts.py` holds the build templates (steam power,
   electric drill strips, smelting columns, burner drill/furnace pairs).
   `tools/selftest.py` builds each one for real at every rotation on a
@@ -64,13 +64,15 @@ queue. Each finished or failed job is written to the chat file.
 | `take` / `put` | `from` / `to`, `item`, `count` | move items out of or into a building; `put` also feeds a belt |
 | `take_belt` | `area`, `item`, `count` | pick items off belts in an area |
 | `build` | `area` | build the ghosts in an area from its own inventory, tiles included |
-| `refuel` | `area`, `fuel`, `per` | top up burner buildings (default 5 coal each) |
-| `craft` | `recipe`, `count` | hand-craft; queues only what it has ingredients for |
+| `refuel` | `area`, `fuel`, `target` | top up burner buildings (default 5 coal each); a short supply is shared evenly |
+| `craft` | `recipe`, `count`, `wait` | hand-craft; queues only what it has ingredients for; `wait: true` stays until it's made |
+| `collect` | `area`, `item`, `count` | take an item (or everything) from every building output in an area |
 | `mine` | `kind`, `name`, `at`, `radius`, `count` | mine by hand, nearest first |
 | `deconstruct` | `area` | mine everything marked for deconstruction in an area |
 | `pickup` | `at`, `radius` | collect items lying on the ground |
 | `rotate` | `at`, `direction` | turn a building (0 north, 4 east, 8 south, 12 west) |
 | `wait` | `ticks`, or `craft: true` | wait a while, or until crafting finishes |
+| `repeat` | `every_ticks`, `jobs`, `times` | run a list of jobs now and again on a timer |
 
 `mine` takes `kind` = `resource` (the default; `name` is the ore), `tree`,
 `rock`, or `entity` (pick up one of its own buildings; `name` is required).
@@ -88,6 +90,43 @@ does: what it crafts and mines is added to the production statistics, and a
 technology unlocked by crafting, mining or building something is researched
 when the character does it. `agent_credit {"item": "lab", "count": 1}` counts
 items it made before 0.2.9; they must still exist, carried or built.
+
+A job that finishes without doing anything (a `take` that moved nothing, a
+`build` that found no ghosts) is reported with `warn: true` and a `reason`.
+
+A `repeat` registers its jobs and steps aside, so other jobs run in between;
+its rounds are only reported when one fails or warns. `agent_stop` clears the
+queue and every repeat; `{"keep_repeats": true}` keeps them, and
+`{"repeat_id": n}` stops one.
+
+Other commands for the character: `agent_status` (position, inventory, the
+current job's target and progress, the crafting queue, repeats),
+`agent_bots {"enabled": false}` (hold back its own construction robots so
+ghosts are built by hand in the order given), `research_triggers` (what each
+trigger technology still needs).
+
+### Alerts
+
+The mod writes `{"kind": "alert", "what": ...}` lines to the chat file when
+something goes wrong within 48 tiles of the character or in an area added
+with `watch {"area": [[x1, y1], [x2, y2]]}` (up to 10; `{"clear": true}`
+forgets them):
+
+| `what` | Meaning |
+| --- | --- |
+| `no_fuel` | a burner building has run out |
+| `output_blocked` | a drill has nowhere to put its ore |
+| `dropping_on_ground` | a drill is facing nothing |
+| `no_minable_resources` | a drill has run out of ore |
+| `output_full` | a furnace or assembler's output is full |
+| `job_failed` | one of the character's jobs failed |
+| `inventory_nearly_full` | the character has 5 or fewer free slots |
+| `research_queue_empty` | research finished and nothing is queued |
+
+A building is reported when it goes bad and again every five minutes while
+it stays that way. `area_status` gives the whole picture on request: counts
+by status name for each kind of building, and the positions of the ones that
+aren't working.
 
 Not yet possible for the character: driving, fighting and repairing,
 changing armour or equipment, and swapping a building for its upgrade in

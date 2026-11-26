@@ -137,3 +137,7 @@ Checked against the game's own data files (2.1.25, base and space-age prototypes
 - **Splitter filters:** the filtered item leaves on one side and everything else on the other. If one output is blocked, everything leaves by the other.
 
 Sources: wiki.factorio.com (Transport belts/Physics, Inserters, Inserter capacity bonus, Bulk inserter, Power production, Steam engine, Boiler, Offshore pump, Big electric pole, Electric mining drill, Enemies, Pollution) and the Factorio 2.1.25 data files and changelog.
+- **Factorio 2.x renamed the crafting inventories.** `defines.inventory.furnace_result`, `furnace_source` and `assembling_machine_output` are gone (`crafter_input`, `crafter_output` now). A missing define is `nil`, and `pcall` hides the failure, which is how `take` moved 0 for so long. Walk `1..get_max_inventory_index()` or check `doc-html/runtime-api.json` rather than trusting a name from memory.
+- **The game counts nothing for a character with no player** (fixed in 0.2.9). Its crafts and mined ore never reached the production stats, though the ingredients it used did. The mod now credits them; in the test the engine then fired the craft-item research trigger by itself.
+- **A burner inserter with no fuel reads `waiting_for_source_items`, not `no_fuel`**, until it has something to move. Don't use its status to tell whether it's fuelled.
+- **Wooden chests are not fuel in 2.1.** Wood, coal, solid fuel and the rest still are.
