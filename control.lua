@@ -1497,11 +1497,21 @@ local function entity_at_pos(c, pos)
 end
 
 local function item_inventories(e)
-	local out = {}
-	for _, id in pairs({ defines.inventory.chest, defines.inventory.furnace_result, defines.inventory.assembling_machine_output,
-		defines.inventory.fuel, defines.inventory.furnace_source }) do
-		local ok, inv = pcall(e.get_inventory, id)
-		if ok and inv then out[#out + 1] = inv end
+	-- Every inventory the entity has, output first so a take drains products
+	-- before ingredients. Walks the indices instead of naming inventories:
+	-- the defines were renamed in 2.x (furnace_result -> crafter_output, ...).
+	local out, seen = {}, {}
+	local ok, first = pcall(e.get_output_inventory)
+	if ok and first then
+		out[1] = first
+		seen[first.index] = true
+	end
+	for id = 1, e.get_max_inventory_index() do
+		local got, inv = pcall(e.get_inventory, id)
+		if got and inv and not seen[id] then
+			out[#out + 1] = inv
+			seen[id] = true
+		end
 	end
 	return out
 end

@@ -1,4 +1,9 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.2.7
+Date: 2026-11-25
+  Bugfixes:
+    - The agent's take job moved nothing out of furnaces and assembling machines: it looked for inventories by names Factorio 2.x no longer has. It now checks every inventory a building has, output first.
+---------------------------------------------------------------------------------------------------
 Version: 0.2.6
 Date: 2026-11-25
   Features:

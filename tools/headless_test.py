@@ -178,6 +178,27 @@ def main():
         else:
             print("no uranium within 600: fluid check not exercised")
 
+        # 4d) smelt in a furnace and take the plates back out (take must see the output slot)
+        cc.call("agent_jobs", {"jobs": [{"type": "craft", "recipe": "stone-furnace", "count": 1},
+                                        {"type": "wait", "craft": True}]}, port=PORT)
+        st = agent_wait(30)
+        pos = st["position"]
+        placed = None
+        for dx, dy in [(4, 0), (-4, 0), (0, 4), (0, -4), (6, 6), (-6, -6)]:
+            fx, fy = round(pos["x"]) + dx, round(pos["y"]) + dy
+            placed = cc.call("place", {"entities": [{"name": "stone-furnace", "position": [fx, fy]}]}, port=PORT)
+            if placed.get("placed"):
+                break
+        print("place furnace:", placed)
+        cc.call("agent_jobs", {"jobs": [{"type": "build", "area": [[fx - 2, fy - 2], [fx + 2, fy + 2]]},
+                                        {"type": "put", "to": [fx, fy], "item": "wood", "count": 2},
+                                        {"type": "put", "to": [fx, fy], "item": "iron-ore", "count": 6},
+                                        {"type": "wait", "ticks": 900},
+                                        {"type": "take", "from": [fx, fy], "item": "iron-plate"}]}, port=PORT)
+        st = agent_wait(60)
+        results["take_from_furnace"] = st["inventory"].get("iron-plate", 0) >= 2
+        print("after smelt+take:", st["inventory"])
+
         # 5) wait ticks
         t0 = cc.call("ping", {}, port=PORT)["tick"]
         cc.call("agent_jobs", {"jobs": [{"type": "wait", "ticks": 120}]}, port=PORT)
