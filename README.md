@@ -142,6 +142,11 @@ To watch it work:
 
 ## Development tools
 
+- `tools/mcp_server.py`: an MCP server that gives the Claude desktop app
+  direct tools for the game (`ping`, `agent_jobs`, `events`, `call`,
+  `run_script`, and `guide`, which serves `docs/agent-guide.md`). Add it under
+  Settings > Developer > Edit Config; the snippet is at the top of the file.
+  It needs no packages and replaces the relay.
 - `tools/relay.py` and `tools/ccr.py`: a file relay for a Claude that can't
   reach localhost. Run `python tools/relay.py` on the gaming PC; Claude then
   sends commands with `python3 tools/ccr.py cc.py ping`.

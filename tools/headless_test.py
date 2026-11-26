@@ -121,6 +121,73 @@ def chat_records(kind):
     return out
 
 
+class Mcp:
+    """Drives tools/mcp_server.py over stdio the way a Claude app does."""
+
+    def __init__(self):
+        env = dict(os.environ, CC_PORT=str(PORT), CC_WRITE_DIR=WORK)
+        self.proc = subprocess.Popen([sys.executable, os.path.join(TOOLS, "mcp_server.py")], env=env,
+                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        self.n = 0
+
+    def request(self, method, params=None):
+        self.n += 1
+        msg = {"jsonrpc": "2.0", "id": self.n, "method": method, "params": params or {}}
+        self.proc.stdin.write(json.dumps(msg).encode() + b"\n")
+        self.proc.stdin.flush()
+        reply = json.loads(self.proc.stdout.readline())
+        assert reply["id"] == self.n, reply
+        return reply
+
+    def notify(self, method):
+        self.proc.stdin.write(json.dumps({"jsonrpc": "2.0", "method": method}).encode() + b"\n")
+        self.proc.stdin.flush()
+
+    def tool(self, name, args=None):
+        """Returns (is_error, text) for one tool call."""
+        res = self.request("tools/call", {"name": name, "arguments": args or {}})["result"]
+        return res["isError"], res["content"][0]["text"]
+
+    def close(self):
+        self.proc.stdin.close()
+        self.proc.wait(10)
+
+
+def mcp_checks():
+    """The MCP server against the running test game. Returns {check: passed}."""
+    out = {}
+    m = Mcp()
+    try:
+        init = m.request("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
+                                        "clientInfo": {"name": "test", "version": "0"}})["result"]
+        m.notify("notifications/initialized")
+        tools = {t["name"] for t in m.request("tools/list")["result"]["tools"]}
+        out["mcp_handshake"] = (init["protocolVersion"] == "2025-06-18" and "tools" in init["capabilities"]
+                                and {"guide", "ping", "agent_jobs", "events", "call", "run_script"} <= tools)
+        err, text = m.tool("ping")
+        out["mcp_ping"] = not err and json.loads(text)["tick"] > 0
+        err, text = m.tool("guide")
+        out["mcp_guide"] = not err and "## Jobs" in text
+        m.tool("events")  # skip the history, so the next call waits for something new
+        err, text = m.tool("agent_jobs", {"jobs": [{"type": "say", "text": "mcp test"}, {"type": "wait", "ticks": 30}]})
+        queued = not err and json.loads(text)["queued"] >= 1
+        t0 = time.time()
+        err, text = m.tool("events", {"wait_seconds": 20, "kinds": ["agent"]})
+        got = json.loads(text)["events"]
+        out["mcp_jobs_and_events"] = queued and not err and bool(got) and got[0]["job"] == "say" and time.time() - t0 < 15
+        err, text = m.tool("call", {"command": "area_status", "args": {"center": [0, 0], "radius": 5}})
+        out["mcp_call"] = not err and "counts" in json.loads(text)
+        err, text = m.tool("run_script", {"script": "cc.py", "args": ["--port", str(PORT), "ping"]})
+        out["mcp_run_script"] = not err and '"version"' in text
+        err, text = m.tool("call", {"command": "no_such_command"})
+        err2, _ = m.tool("run_script", {"script": "../control.lua"})
+        out["mcp_errors_are_reported"] = err and err2 and bool(text)
+        out["mcp_unknown_method"] = "error" in m.request("no/such/method")
+    finally:
+        m.close()
+    return out
+
+
 def main():
     exe = find_factorio()
     print("factorio:", exe)
@@ -420,6 +487,10 @@ def main():
             results["lab_trigger"] = (ready and st["inventory"].get("lab", 0) == 1 and labs == 1
                                       and "automation-science-pack" not in avail2)
             print("lab: ready before", ready, "| labs made", labs, "| available after", avail2)
+
+        # 4s) the MCP server, as a Claude app would use it
+        results.update(mcp_checks())
+        agent_wait(10)
 
         # 5) wait ticks
         t0 = cc.call("ping", {}, port=PORT)["tick"]
