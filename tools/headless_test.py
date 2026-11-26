@@ -19,6 +19,7 @@ sys.path.insert(0, TOOLS)
 import cc  # noqa: E402
 
 PORT = 34598
+SEED = "424242"   # fixed, so every run gets the same map
 WORK = os.path.join(REPO, ".relay", "headless")
 
 
@@ -86,8 +87,23 @@ def agent_wait(secs, port=PORT):
         st = cc.call("agent_status", {}, port=port)
         if not st.get("queued"):
             return st
-        time.sleep(1)
+        time.sleep(0.25)
     return cc.call("agent_status", {}, port=port)
+
+
+def last_report(job):
+    """The agent's most recent report for a job type, from the headless chat file."""
+    path = os.path.join(WORK, "script-output", "claude-companion", "chat.jsonl")
+    found = None
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if rec.get("kind") == "agent" and rec.get("job") == job:
+                found = rec
+    return found
 
 
 def main():
@@ -95,7 +111,7 @@ def main():
     print("factorio:", exe)
     cfg, mods = setup(exe)
     save = os.path.join(WORK, "test.zip")
-    p = run(exe, cfg, mods, "--create", save)
+    p = run(exe, cfg, mods, "--create", save, "--map-gen-seed", SEED)
     out, _ = p.communicate(timeout=120)
     if not os.path.isfile(save):
         raise SystemExit("map create failed:\n" + out[-3000:])
@@ -179,9 +195,11 @@ def main():
             print("no uranium within 600: fluid check not exercised")
 
         # 4d) smelt in a furnace and take the plates back out (take must see the output slot)
-        cc.call("agent_jobs", {"jobs": [{"type": "craft", "recipe": "stone-furnace", "count": 1},
+        cc.call("agent_jobs", {"jobs": [{"type": "mine", "name": ore["name"], "at": spot, "count": 6},
+                                        {"type": "mine", "kind": "tree", "radius": 80, "count": 4},
+                                        {"type": "craft", "recipe": "stone-furnace", "count": 1},
                                         {"type": "wait", "craft": True}]}, port=PORT)
-        st = agent_wait(30)
+        st = agent_wait(150)
         pos = st["position"]
         placed = None
         for dx, dy in [(4, 0), (-4, 0), (0, 4), (0, -4), (6, 6), (-6, -6)]:
@@ -191,13 +209,119 @@ def main():
                 break
         print("place furnace:", placed)
         cc.call("agent_jobs", {"jobs": [{"type": "build", "area": [[fx - 2, fy - 2], [fx + 2, fy + 2]]},
-                                        {"type": "put", "to": [fx, fy], "item": "wood", "count": 2},
-                                        {"type": "put", "to": [fx, fy], "item": "iron-ore", "count": 6},
-                                        {"type": "wait", "ticks": 900},
-                                        {"type": "take", "from": [fx, fy], "item": "iron-plate"}]}, port=PORT)
-        st = agent_wait(60)
-        results["take_from_furnace"] = st["inventory"].get("iron-plate", 0) >= 2
+                                        {"type": "put", "to": [fx, fy], "item": "wood"},
+                                        {"type": "put", "to": [fx, fy], "item": "iron-ore"},
+                                        {"type": "wait", "ticks": 2500},
+                                        {"type": "take", "from": [fx, fy], "item": "iron-plate"},
+                                        {"type": "put", "to": [fx, fy], "item": "stone", "count": 4},
+                                        {"type": "wait", "ticks": 500},
+                                        {"type": "take", "from": [fx, fy], "item": "stone-brick"}]}, port=PORT)
+        st = agent_wait(120)
+        results["take_from_furnace"] = st["inventory"].get("iron-plate", 0) >= 9
         print("after smelt+take:", st["inventory"])
+
+        # 4e) rotate a building, and feed a belt by hand
+        cc.call("agent_jobs", {"jobs": [{"type": "craft", "recipe": "burner-inserter", "count": 1},
+                                        {"type": "craft", "recipe": "transport-belt", "count": 1},
+                                        {"type": "wait", "craft": True}]}, port=PORT)
+        st = agent_wait(30)
+        ix, iy = fx + 0.5, fy + 3.5
+        bx, by_ = fx + 2.5, fy + 3.5
+        print("place:", cc.call("place", {"entities": [{"name": "burner-inserter", "position": [ix, iy]},
+                                                       {"name": "transport-belt", "position": [bx, by_]}],
+                                          "partial": True}, port=PORT))
+        cc.call("agent_jobs", {"jobs": [{"type": "build", "area": [[fx - 1, fy + 2], [fx + 4, fy + 5]]},
+                                        {"type": "rotate", "at": [ix, iy], "direction": 4},
+                                        {"type": "put", "to": [bx, by_], "item": "iron-plate", "count": 2}]}, port=PORT)
+        agent_wait(40)
+        rot, put = last_report("rotate"), last_report("put")
+        results["rotate"] = bool(rot) and rot.get("event") == "done" and rot.get("direction") == 4
+        results["put_on_belt"] = bool(put) and put.get("moved") == 2
+        print("rotate:", rot, "put:", put)
+
+        # 4f) tile ghosts: lay stone path from bricks
+        st = cc.call("agent_status", {}, port=PORT)
+        bricks = st["inventory"].get("stone-brick", 0)
+        tx, ty = fx - 3, fy + 3
+        laid = cc.call("tiles", {"tile": "stone-path", "positions": [[tx, ty], [tx, ty + 1]]}, port=PORT)
+        print("tiles:", laid, "bricks:", bricks)
+        cc.call("agent_jobs", {"jobs": [{"type": "build", "area": [[tx - 1, ty - 1], [tx + 2, ty + 3]]}]}, port=PORT)
+        st = agent_wait(30)
+        b = last_report("build")
+        results["build_tiles"] = bool(b) and b.get("made") == 2 and st["inventory"].get("stone-brick", 0) == bricks - 2
+        print("tile build:", b)
+
+        # 4g) a ghost on a tree: build must fell the tree first
+        m = cc.call("map", {"center": [st["position"]["x"], st["position"]["y"]], "radius": 40}, port=PORT)
+        cells = [(m["origin"]["x"] + cx, m["origin"]["y"] + cy)
+                 for cy, row in enumerate(m["rows"]) for cx, ch in enumerate(row) if ch == "T"]
+        cells.sort(key=lambda c: (c[0] - st["position"]["x"]) ** 2 + (c[1] - st["position"]["y"]) ** 2)
+        hit = None
+        for x, y in cells[:40]:
+            r = cc.call("place", {"entities": [{"name": "wooden-chest", "position": [x + 0.5, y + 0.5]}]}, port=PORT)
+            if r.get("placed") and r.get("cleared"):
+                hit = (x, y)
+                break
+            if r.get("placed"):
+                cc.call("remove_ghosts", {"area": [[x, y], [x + 1, y + 1]]}, port=PORT)
+        if hit:
+            wood0 = st["inventory"].get("wood", 0)
+            cc.call("agent_jobs", {"jobs": [{"type": "build", "area": [[hit[0] - 1, hit[1] - 1], [hit[0] + 2, hit[1] + 2]]}]},
+                    port=PORT)
+            st = agent_wait(60)
+            b = last_report("build")
+            results["build_clears_tree"] = bool(b) and b.get("made") == 1 and st["inventory"].get("wood", 0) > wood0
+            print("build over tree:", b)
+        else:
+            print("no tree under a ghost spot: obstacle clearing not exercised")
+
+        # 4h) deconstruct job: mine everything marked in an area
+        px, py = round(st["position"]["x"]), round(st["position"]["y"])
+        area = [[px - 12, py - 12], [px + 12, py + 12]]
+        marked = cc.call("deconstruct", {"area": area}, port=PORT)["marked"]
+        if marked:
+            cc.call("agent_jobs", {"jobs": [{"type": "deconstruct", "area": area}]}, port=PORT)
+            agent_wait(40 + marked * 4)
+            d = last_report("deconstruct")
+            results["deconstruct"] = bool(d) and d.get("got") == marked
+            print("deconstruct:", marked, "marked ->", d)
+        else:
+            print("nothing to deconstruct nearby: job not exercised")
+
+        # 4i) what the character crafts and mines must reach the production statistics
+        prod = cc.call("production", {"items": ["wooden-chest", "transport-belt", "iron-gear-wheel", "wood", "iron-ore"]},
+                       port=PORT)
+        print("production:", {k: (v["made_total"], v["used_total"]) for k, v in prod.items()})
+        results["craft_stats"] = (prod["wooden-chest"]["made_total"] == 1 and prod["transport-belt"]["made_total"] == 2
+                                  and prod["iron-gear-wheel"]["made_total"] == 2 and prod["iron-gear-wheel"]["used_total"] == 2)
+        results["mine_stats"] = prod["iron-ore"]["made_total"] == 12 and prod["wood"]["made_total"] >= 8
+
+        # 4j) --research: craft a lab by hand; that must research automation-science-pack (several minutes)
+        if "--research" in sys.argv:
+            copper = by["copper-ore"]
+            cc.call("agent_jobs", {"jobs": [
+                {"type": "mine", "name": "iron-ore", "at": spot, "count": 50},
+                {"type": "mine", "name": "copper-ore", "at": [copper["cx"], copper["cy"]], "count": 16},
+                {"type": "mine", "kind": "tree", "radius": 120, "count": 16},
+                {"type": "put", "to": [fx, fy], "item": "wood"},
+                {"type": "put", "to": [fx, fy], "item": "iron-ore"},
+                {"type": "wait", "ticks": 10200},
+                {"type": "take", "from": [fx, fy], "item": "iron-plate"},
+                {"type": "put", "to": [fx, fy], "item": "copper-ore"},
+                {"type": "wait", "ticks": 3400},
+                {"type": "take", "from": [fx, fy], "item": "copper-plate"}]}, port=PORT)
+            st = agent_wait(900)
+            print("before lab:", st["inventory"], last_report("take"))
+            avail = cc.call("research", {}, port=PORT)["available"]
+            ready = "automation-science-pack" in avail
+            cc.call("agent_jobs", {"jobs": [{"type": "craft", "recipe": "lab", "count": 1},
+                                            {"type": "wait", "craft": True}]}, port=PORT)
+            st = agent_wait(120)
+            avail2 = cc.call("research", {}, port=PORT)["available"]
+            labs = cc.call("production", {"items": ["lab"]}, port=PORT)["lab"]["made_total"]
+            results["lab_trigger"] = (ready and st["inventory"].get("lab", 0) == 1 and labs == 1
+                                      and "automation-science-pack" not in avail2)
+            print("lab: ready before", ready, "| labs made", labs, "| available after", avail2)
 
         # 5) wait ticks
         t0 = cc.call("ping", {}, port=PORT)["tick"]

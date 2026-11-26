@@ -619,6 +619,34 @@ function handlers.place(args)
 	return { placed = placed, exists = exists, cleared = cleared, blocked = blocked, failed = failed, bom = bom }
 end
 
+-- {tile = "landfill", area = box} or {tile, positions = {{x, y}, ...}}: lays
+-- tile ghosts (landfill, stone path, concrete) for robots or Claude's
+-- character to build. Tiles that can't take the ghost are skipped.
+function handlers.tiles(args)
+	local surface, force = surface_of(args), force_of(args)
+	local proto = prototypes.tile[args.tile or ""]
+	if not proto then error("no tile named " .. tostring(args.tile)) end
+	local spots = {}
+	if args.positions then
+		for _, raw in ipairs(args.positions) do spots[#spots + 1] = pos_of(raw) end
+	else
+		local area = area_of(args, 2, 50)
+		for x = math.floor(area[1][1]), math.ceil(area[2][1]) - 1 do
+			for y = math.floor(area[1][2]), math.ceil(area[2][2]) - 1 do spots[#spots + 1] = { x = x, y = y } end
+		end
+	end
+	local placed, skipped = 0, 0
+	for _, pos in ipairs(spots) do
+		local at = { x = math.floor(pos.x) + 0.5, y = math.floor(pos.y) + 0.5 }
+		local ok, g = pcall(surface.create_entity, { name = "tile-ghost", inner_name = proto.name, position = at,
+			force = force, raise_built = true })
+		if ok and g then placed = placed + 1 else skipped = skipped + 1 end
+	end
+	local bom, items = {}, proto.items_to_place_this
+	if items and items[1] and placed > 0 then bom[items[1].name] = placed * (items[1].count or 1) end
+	return { placed = placed, skipped = skipped, bom = bom }
+end
+
 -- Removes ghosts in an area (all of them, or only those placed under `tag`).
 function handlers.remove_ghosts(args)
 	local surface, force = surface_of(args), force_of(args)
@@ -1353,6 +1381,14 @@ end)
 --   {type = "refuel", area = box, fuel = "coal", per = 5}   top up burners
 --   {type = "craft", recipe = name, count = n}
 --   {type = "say", text = "..."}
+--   {type = "take_belt", area = box, item = name, count = n?}   off belts
+--   {type = "mine", kind = "resource"|"tree"|"rock"|"entity", name?, at?, radius?, count?}
+--   {type = "deconstruct", area = box}  mine everything marked for deconstruction
+--   {type = "pickup", at?, radius?}     items lying on the ground
+--   {type = "rotate", at = {x, y}, direction = n?}
+--   {type = "wait", ticks = n} or {type = "wait", craft = true}
+-- put also feeds a belt; build also lays tile ghosts (landfill) and clears
+-- trees and rocks marked for deconstruction under a ghost.
 -- Every finished or failed job is reported to Claude through the chat file.
 
 local AGENT_REACH = 8
@@ -1516,6 +1552,105 @@ local function item_inventories(e)
 	return out
 end
 
+-- A character with no player behind it is invisible to the game's own
+-- bookkeeping: what it crafts, mines and builds reaches neither the
+-- production statistics nor the technologies unlocked by a trigger ("craft a
+-- lab"). So the mod does that bookkeeping for it.
+
+-- The prototype name inside an ItemIDFilter / EntityIDFilter, however it reads.
+local function id_name(f)
+	if f == nil or type(f) == "string" then return f end
+	local ok, n = pcall(function() return f.name end)
+	if not ok or n == nil then return nil end
+	if type(n) == "string" then return n end
+	local ok2, n2 = pcall(function() return n.name end)
+	return ok2 and n2 or nil
+end
+
+-- Researches every technology whose trigger this satisfies. `kind` is
+-- "craft-item", "mine-entity" or "build-entity"; `name` the item or entity.
+local function fire_triggers(c, kind, name)
+	local force, fired = c.force, {}
+	local stats = force.get_item_production_statistics(c.surface)
+	for _, tech in pairs(force.technologies) do
+		local trig = tech.enabled and not tech.researched and tech.prototype.research_trigger
+		if trig and trig.type == kind and id_name(kind == "craft-item" and trig.item or trig.entity) == name then
+			local ready = kind ~= "craft-item" or stats.get_input_count(name) >= (trig.count or 1)
+			for _, pre in pairs(tech.prerequisites) do
+				if not pre.researched then ready = false end
+			end
+			if ready then
+				tech.researched = true
+				fired[#fired + 1] = tech.name
+				to_claude { kind = "research", name = tech.name, trigger = kind, by = "agent" }
+			end
+		end
+	end
+	return fired
+end
+
+-- Records `n` of an item as produced by our force.
+local function credit_item(c, name, n)
+	if n ~= 0 then c.force.get_item_production_statistics(c.surface).on_flow(name, n) end
+end
+
+local function product_amount(p)
+	local n = p.amount or ((p.amount_min or 1) + (p.amount_max or 1)) / 2
+	return n * (p.probability or 1)
+end
+
+-- Credits the crafts the character finished since the last look, by watching
+-- its crafting queue shrink. Intermediates are credited too, as for a player.
+local function credit_crafting(a, c)
+	local snap = a.craft_snap
+	local size = c.crafting_queue_size
+	if not snap and size == 0 then return end
+	local now = {}
+	if size > 0 then
+		for _, q in pairs(c.crafting_queue) do now[q.recipe] = (now[q.recipe] or 0) + q.count end
+	end
+	for recipe, n in pairs(snap or {}) do
+		local done = n - (now[recipe] or 0)
+		local r = done > 0 and c.force.recipes[recipe]
+		if r then
+			-- products only: the game already counts the ingredients as used
+			for _, prod in pairs(r.products) do
+				if prod.type == "item" then
+					credit_item(c, prod.name, product_amount(prod) * done)
+					fire_triggers(c, "craft-item", prod.name)
+				end
+			end
+		end
+	end
+	a.craft_snap = next(now) and now or nil
+end
+
+local BELT_TYPES = { ["transport-belt"] = true, ["underground-belt"] = true, ["splitter"] = true }
+
+-- Hand-mining progress per tick, at the character's real speed.
+local function mining_speed(c)
+	local function num(f, d) local ok, v = pcall(f); return (ok and type(v) == "number") and v or d end
+	return num(function() return c.prototype.mining_speed end, 0.5)
+		* (1 + num(function() return c.force.manual_mining_speed_modifier end, 0)
+			+ num(function() return c.character_mining_speed_modifier end, 0)) / 60
+end
+
+-- One tick of mining entity `t` (not a resource) by hand, with progress kept
+-- on the job. Returns "busy", "mined", or "full" (no room for the result).
+local function mine_entity_step(c, inv, job, t)
+	if job.mining ~= t then job.mining, job.progress = t, 0 end
+	job.progress = (job.progress or 0) + mining_speed(c)
+	if job.progress < (t.prototype.mineable_properties.mining_time or 1) then return "busy" end
+	job.mining, job.progress = nil, 0
+	local done = t.mine { inventory = inv, force = false, raise_destroyed = true, ignore_minable = false }
+	return done and "mined" or "full"
+end
+
+local function hand_reach(c)
+	local ok, r = pcall(function() return c.reach_distance end)
+	return math.min((ok and r) or 10, AGENT_REACH)
+end
+
 -- One step of the current job. Returns "done", "failed" (with extra info) or nil.
 local function job_step(a, c, job)
 	local inv = c.get_main_inventory()
@@ -1550,6 +1685,22 @@ local function job_step(a, c, job)
 					moved = moved + put
 				end
 			end
+		elseif BELT_TYPES[e.type] then
+			-- onto a belt: one item per lane as room comes free, like dropping by hand
+			job.moved = job.moved or 0
+			job.want = job.want or math.min(job.count or inv.get_item_count(job.item), inv.get_item_count(job.item))
+			for li = 1, e.get_max_transport_line_index() do
+				local line = e.get_transport_line(li)
+				if job.moved < job.want and line.can_insert_at_back()
+					and line.insert_at_back { name = job.item, count = 1 } then
+					inv.remove { name = job.item, count = 1 }
+					job.moved, job.idle = job.moved + 1, 0
+				end
+			end
+			if job.moved >= job.want then return "done", { item = job.item, moved = job.moved } end
+			job.idle = (job.idle or 0) + 1
+			if job.idle > 300 then return "done", { item = job.item, moved = job.moved, reason = "belt is full" } end
+			return nil
 		else
 			local have = inv.get_item_count(job.item)
 			local n = math.min(job.count or have, have)
@@ -1586,7 +1737,7 @@ local function job_step(a, c, job)
 		if not job.todo then
 			job.todo, job.made, job.skipped = {}, 0, {}
 			if job.type == "build" then
-				for _, g in pairs(c.surface.find_entities_filtered { area = job.area, type = "entity-ghost", force = c.force }) do
+				for _, g in pairs(c.surface.find_entities_filtered { area = job.area, type = { "entity-ghost", "tile-ghost" }, force = c.force }) do
 					job.todo[#job.todo + 1] = g
 				end
 			else
@@ -1610,7 +1761,7 @@ local function job_step(a, c, job)
 		end
 		if not bi then
 			a.target_bi = nil
-			return "done", { made = job.made, missing = job.skipped, unreachable = job.unreachable }
+			return "done", { made = job.made, missing = job.skipped, unreachable = job.unreachable, blocked = job.blocked }
 		end
 		a.target_bi = bi
 		local t = job.todo[bi]
@@ -1624,10 +1775,26 @@ local function job_step(a, c, job)
 				return nil
 			end
 			if not goto_step(a, c, t.position, AGENT_REACH) then return nil end
-			local _, built = t.revive { raise_revive = true }
-			if built then
+			-- revive returns nil when something is in the way
+			local built_name = t.ghost_name
+			if t.revive { raise_revive = true } then
 				inv.remove { name = need.name, count = count }
 				job.made = job.made + 1
+				fire_triggers(c, "build-entity", built_name)
+			else
+				-- clear what is marked for deconstruction under it (trees, rocks,
+				-- our own buildings) by hand, then try again
+				local box = t.bounding_box
+				for _, o in pairs(c.surface.find_entities_filtered { area = box, to_be_deconstructed = true }) do
+					local mp = o.valid and o ~= c and o.prototype.mineable_properties
+					if mp and mp.minable then
+						if mine_entity_step(c, inv, job, o) == "full" then
+							return "done", { made = job.made, missing = job.skipped, reason = "inventory full" }
+						end
+						return nil
+					end
+				end
+				job.blocked = (job.blocked or 0) + 1
 			end
 			job.todo[bi] = nil
 		else
@@ -1700,11 +1867,7 @@ local function job_step(a, c, job)
 		end
 		if not goto_step(a, c, t.position, reach - 0.3) then return nil end
 		local mp = t.prototype.mineable_properties
-		local function num(f, d) local ok, v = pcall(f); return (ok and type(v) == "number") and v or d end
-		local speed = num(function() return c.prototype.mining_speed end, 0.5)
-			* (1 + num(function() return c.force.manual_mining_speed_modifier end, 0)
-				+ num(function() return c.character_mining_speed_modifier end, 0))
-		job.progress = (job.progress or 0) + speed / 60
+		job.progress = (job.progress or 0) + mining_speed(c)
 		if job.progress < (mp.mining_time or 1) then return nil end
 		job.progress = 0
 		-- the item we count: the named one, else the first product
@@ -1719,16 +1882,26 @@ local function job_step(a, c, job)
 							return "done", { got = job.got, reason = "inventory full" }
 						end
 						inv.insert { name = p.name, count = n }
+						credit_item(c, p.name, n)
 					end
 				end
 			end
+			fire_triggers(c, "mine-entity", t.name)
 			if t.amount <= 1 then t.deplete() else t.amount = t.amount - 1 end
+			job.got = job.got + (main and (inv.get_item_count(main) - before) or 1)
 		else
+			local mined_name = t.name
 			local done = t.mine { inventory = inv, force = false, raise_destroyed = true, ignore_minable = false }
 			if not done then return "done", { got = job.got, reason = "inventory full" } end
 			job.target = nil
+			local gained = main and (inv.get_item_count(main) - before) or 1
+			job.got = job.got + gained
+			-- wood and stone count as produced; picking a building back up doesn't
+			if kind ~= "entity" then
+				if main then credit_item(c, main, gained) end
+				fire_triggers(c, "mine-entity", mined_name)
+			end
 		end
-		job.got = job.got + (main and (inv.get_item_count(main) - before) or 1)
 		if job.count and job.got >= job.count then return "done", { got = job.got } end
 		return nil
 
@@ -1750,6 +1923,39 @@ local function job_step(a, c, job)
 		job.got = (job.got or 0) + n
 		return nil
 
+	elseif job.type == "deconstruct" then
+		-- mine by hand everything marked for deconstruction in `area`, nearest first
+		job.got = job.got or 0
+		local t = job.target
+		if not (t and t.valid) then
+			job.target = nil
+			local best, bd
+			for _, e in pairs(c.surface.find_entities_filtered { area = job.area, to_be_deconstructed = true }) do
+				local mp = e ~= c and e.prototype.mineable_properties
+				if mp and mp.minable and e.type ~= "deconstructible-tile-proxy" then
+					local d = dist(c.position, e.position)
+					if not bd or d < bd then best, bd = e, d end
+				end
+			end
+			if not best then return "done", { got = job.got } end
+			job.target, t = best, best
+		end
+		if not goto_step(a, c, t.position, hand_reach(c) - 0.3) then return nil end
+		local r = mine_entity_step(c, inv, job, t)
+		if r == "full" then return "done", { got = job.got, reason = "inventory full" } end
+		if r == "mined" then job.got, job.target = job.got + 1, nil end
+		return nil
+
+	elseif job.type == "rotate" then
+		-- turn a building: to `direction` (0 north, 4 east, 8 south, 12 west), or one step if not given
+		local target = pos_of(job.at)
+		if not goto_step(a, c, target, hand_reach(c) - 0.3) then return nil end
+		local e = entity_at_pos(c, target)
+		if not e then return "failed", { reason = "nothing at target" } end
+		if not e.supports_direction then return "failed", { reason = e.name .. " cannot be rotated" } end
+		if job.direction then e.direction = job.direction else e.rotate() end
+		return "done", { name = e.name, direction = e.direction }
+
 	elseif job.type == "wait" then
 		-- `ticks` to wait, or `craft = true` to wait until the crafting queue is empty
 		job.until_tick = job.until_tick or (game.tick + (job.ticks or 0))
@@ -1763,12 +1969,21 @@ end
 
 script.on_nth_tick(1, function()
 	local a = storage.agent
-	if not (a and a.jobs and a.jobs[1]) then return end
+	if not (a and a.char) then return end
 	local c = agent_char()
 	if not c then return end
-	local job = a.jobs[1]
+	-- crafting carries on after the craft job is done, so look every tick
+	local fine, err = pcall(credit_crafting, a, c)
+	if not fine and not a.credit_err then
+		a.credit_err = true
+		to_claude { kind = "error", where = "credit_crafting", error = tostring(err) }
+	end
+	local job = a.jobs and a.jobs[1]
+	if not job then return end
 	local ok, status, extra = pcall(job_step, a, c, job)
 	if not ok then status, extra = "failed", { reason = tostring(status) } end
+	-- re-read the queue after a craft job adds to it, so nothing is miscounted
+	if job.type == "craft" then pcall(credit_crafting, a, c) end
 	if status then
 		table.remove(a.jobs, 1)
 		a.path, a.path_req, a.path_goal, a.stuck, a.target_bi = nil, nil, nil, nil, nil
@@ -1778,6 +1993,16 @@ script.on_nth_tick(1, function()
 		agent_report(status, job, extra)
 	end
 end)
+
+-- Tell Claude when its character dies; the queue is dropped with it.
+script.on_event(defines.events.on_entity_died, function(event)
+	local a = storage.agent
+	if not (a and a.char and event.entity == a.char) then return end
+	local job, pos = a.jobs and a.jobs[1], event.entity.position
+	a.jobs, a.path, a.path_req, a.path_goal, a.stuck, a.target_bi = {}, nil, nil, nil, nil, nil
+	agent_report("died", job, { cause = event.cause and event.cause.valid and event.cause.name or nil,
+		position = { x = pos.x, y = pos.y } })
+end, { { filter = "type", type = "character" } })
 
 -- Player characters reveal the map around them; a player-less one doesn't,
 -- so chart around Claude's character once a second (also keeps its map
@@ -1887,6 +2112,23 @@ function handlers.agent_kit()
 	local bots = c.insert { name = "construction-robot", count = 50 }
 	say("Suited up: power armor, roboports and " .. bots .. " construction bots.")
 	return { equipment = placed, bots = bots }
+end
+
+-- {item, count}: credits items the character crafted before the mod kept
+-- count (0.2.9), and researches anything that unlocks. The items must still
+-- exist, carried or built, so this can't invent production.
+function handlers.agent_credit(args)
+	local c = agent_char()
+	if not c then error("no agent") end
+	local proto = prototypes.item[args.item or ""]
+	if not proto then error("no item named " .. tostring(args.item)) end
+	local n = args.count or 1
+	local have = c.get_main_inventory().get_item_count(proto.name)
+	local place = proto.place_result
+	if place then have = have + c.surface.count_entities_filtered { name = place.name, force = c.force } end
+	if have < n then error("only " .. have .. " " .. proto.name .. " exist to credit") end
+	credit_item(c, proto.name, n)
+	return { credited = n, researched = fire_triggers(c, "craft-item", proto.name) }
 end
 
 function handlers.agent_unstick()

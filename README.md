@@ -42,7 +42,7 @@ nothing extra there.
 - **Claude → game:** `tools/cc.py` sends one JSON command per UDP packet;
   the mod answers to the sender's port. Commands: `ping`, `say`, `state`,
   `map`, `scan`, `resources`, `offshore_spots`, `check`, `fit`, `place`,
-  `remove_ghosts`, `deconstruct`, `ghosts`, `inventory`, `production`,
+  `tiles`, `remove_ghosts`, `deconstruct`, `ghosts`, `inventory`, `production`,
   `research`, `mark`, `clear_marks`, and `lua` (cheats only).
 - **Layouts:** `tools/layouts.py` holds the build templates (steam power,
   electric drill strips, smelting columns, burner drill/furnace pairs).
@@ -61,13 +61,15 @@ queue. Each finished or failed job is written to the chat file.
 | --- | --- | --- |
 | `walk` | `to`, `within` | walk to a position |
 | `say` | `text` | speak in game chat |
-| `take` / `put` | `from` / `to`, `item`, `count` | move items out of or into a building |
+| `take` / `put` | `from` / `to`, `item`, `count` | move items out of or into a building; `put` also feeds a belt |
 | `take_belt` | `area`, `item`, `count` | pick items off belts in an area |
-| `build` | `area` | build the ghosts in an area from its own inventory |
+| `build` | `area` | build the ghosts in an area from its own inventory, tiles included |
 | `refuel` | `area`, `fuel`, `per` | top up burner buildings (default 5 coal each) |
 | `craft` | `recipe`, `count` | hand-craft; queues only what it has ingredients for |
 | `mine` | `kind`, `name`, `at`, `radius`, `count` | mine by hand, nearest first |
+| `deconstruct` | `area` | mine everything marked for deconstruction in an area |
 | `pickup` | `at`, `radius` | collect items lying on the ground |
+| `rotate` | `at`, `direction` | turn a building (0 north, 4 east, 8 south, 12 west) |
 | `wait` | `ticks`, or `craft: true` | wait a while, or until crafting finishes |
 
 `mine` takes `kind` = `resource` (the default; `name` is the ore), `tree`,
@@ -75,6 +77,21 @@ queue. Each finished or failed job is written to the chat file.
 `count` is items of the main product, not things mined: a tree gives 4 wood.
 Without a `count` it mines everything within `radius` (default 24) of `at`.
 It can't mine what a player can't: oil, or ore that needs a fluid.
+
+`build` fells trees and rocks marked for deconstruction under a ghost before
+building it, and reports how many ghosts it `made`, what items were `missing`,
+and how many were `blocked` by something it couldn't clear. If the character
+dies, Claude gets a `died` report naming the cause, and the queue is dropped.
+
+The game keeps no books for a character with no player behind it, so the mod
+does: what it crafts and mines is added to the production statistics, and a
+technology unlocked by crafting, mining or building something is researched
+when the character does it. `agent_credit {"item": "lab", "count": 1}` counts
+items it made before 0.2.9; they must still exist, carried or built.
+
+Not yet possible for the character: driving, fighting and repairing,
+changing armour or equipment, and swapping a building for its upgrade in
+place (mine it and build the new one instead).
 
 To watch it work:
 

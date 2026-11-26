@@ -1,4 +1,22 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.2.9
+Date: 2026-11-25
+  Bugfixes:
+    - What Claude's character crafted or mined never reached the production statistics, so technologies unlocked by crafting something (red science needs a lab) stayed locked. The mod now counts its crafts and mined items, and researches the technologies they unlock.
+  Features:
+    - New command: agent_credit, to count items the character crafted before this version. The items must still exist.
+---------------------------------------------------------------------------------------------------
+Version: 0.2.8
+Date: 2026-11-25
+  Features:
+    - New agent jobs: deconstruct (mine by hand everything marked for deconstruction in an area) and rotate (turn a building).
+    - The agent's build job lays tile ghosts (landfill, stone path, concrete) and fells trees and rocks marked for deconstruction under a ghost before building it.
+    - The agent's put job feeds a belt, one item per lane as room comes free.
+    - New command: tiles, which lays tile ghosts in an area or at a list of positions.
+    - Claude is told when its character dies, and what killed it.
+  Bugfixes:
+    - The agent's build job dropped a ghost without a word when something was in the way. It now counts those as blocked in its report.
+---------------------------------------------------------------------------------------------------
 Version: 0.2.7
 Date: 2026-11-25
   Bugfixes:

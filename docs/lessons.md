@@ -57,6 +57,15 @@ Things learned while building with Claude Companion, from mistakes and from stud
 - Inline `python -c` with quotes inside PowerShell breaks easily. Put anything non-trivial in a script file.
 - A zip Factorio has open can't be deleted. Deploy new versions under new names and remove the old zip after the game closes (a background wait loop).
 
+## Playing from scratch (Claude's character, AI WORLD 2026-11-25)
+
+- **Claude's own bots build any ghost in range, in any order,** from the character's inventory. After picking up five furnaces to empty them, the bots put them straight back on other ghost spots in the block and left a drill with no furnace. Keep ghosts only for the next step when the order matters.
+- **Crafting eats intermediates already in the inventory.** A burner drill or boiler uses a stone furnace, so queue drills before furnaces, or the drills take the furnaces you meant to place.
+- **Rocks are the fastest early stone.** One rock trip gave 76 stone and 74 coal in seconds, against about 2 s per stone from the patch.
+- **Science is behind trigger techs in 2.x.** Automation science pack unlocks on crafting a lab (base technology.lua `research_trigger = {type = "craft-item", item = "lab"}`). Steam power and Electronics are triggers too. Check a tech's trigger in the data files before planning around it (`tools/factorio_data.py`).
+- **Items Claude's character crafts don't count as made** (0.2.7): production stats stay at 0, and craft-item research triggers never fire. Crafting two labs left red science locked. Until the mod credits agent crafting, Chris has to craft the trigger item.
+- **`take` from a furnace moved 0 before 0.2.7** (the 2.x inventory names). Picking the furnace up returns its contents, which worked as a stopgap.
+
 ## From Chris's designs
 
 - **Use iron chests, not wooden** (Chris): assemblers can make them from iron plates; wooden chests need wood carried in by hand. The mall has an iron-chest cell.
