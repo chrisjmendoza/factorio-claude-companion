@@ -1642,7 +1642,7 @@ local function job_step(a, c, job)
 		-- Hand mining at the character's real speed and reach. Targets, nearest
 		-- first, within `radius` of `at` (default: around the character):
 		--   kind = "resource" (default; `name` = "iron-ore", "coal", ...),
-		--   "tree", "rock", or "entity" (pick up our own buildings, `name` optional).
+		--   "tree", "rock", or "entity" (pick up our own buildings, `name` required).
 		-- Stops after `count` items of the main product, or when nothing is left.
 		local kind = job.kind or "resource"
 		-- an unnamed "entity" job would pick up every building of ours in range
@@ -1780,6 +1780,9 @@ script.on_nth_tick(60, function()
 	c.force.chart(c.surface, { { p.x - 48, p.y - 48 }, { p.x + 48, p.y + 48 } })
 end)
 
+-- re-aims open /claude-watch windows; defined below with the watch commands
+local point_cameras
+
 function handlers.agent_spawn(args)
 	local a = agent_state()
 	local c = agent_char()
@@ -1808,6 +1811,7 @@ function handlers.agent_spawn(args)
 		a.map_label = rendering.draw_text { text = "Claude", surface = surface, target = { entity = c, offset = { 0, -3 } },
 			color = AGENT_COLOR, scale = 3, alignment = "center", render_mode = "chart" }
 	end)
+	point_cameras(c)
 	say("I'm here! [gps=" .. math.floor(pos.x) .. "," .. math.floor(pos.y) .. "]")
 	return { spawned = true, position = pos }
 end
@@ -1889,3 +1893,56 @@ function handlers.agent_stop()
 	if c then stop_walking(c) end
 	return { stopped = true }
 end
+
+-- Watching Claude's character.
+--   /claude-follow         the whole view follows it (remote view centred on
+--                          the character); run again, or press Esc, to return.
+--   /claude-watch [zoom]   a small draggable camera window that follows it, so
+--                          the player can keep working; run again to close.
+local CAM_NAME = "claude_cam"
+
+function point_cameras(c)
+	for _, p in pairs(game.players) do
+		local frame = p.gui.screen[CAM_NAME]
+		if frame and frame.cam then
+			frame.cam.surface_index = c.surface.index
+			frame.cam.entity = c
+		end
+	end
+end
+
+local function no_character(p)
+	p.print("Claude has no character on the map yet.", { color = AGENT_COLOR })
+end
+
+commands.add_command("claude-follow", { "command-help.claude-follow" }, function(cmd)
+	local p = cmd.player_index and game.get_player(cmd.player_index)
+	if not p then return end
+	local c = agent_char()
+	if p.controller_type == defines.controllers.remote and c and p.centered_on == c then
+		p.exit_remote_view()
+		return
+	end
+	if not c then return no_character(p) end
+	p.centered_on = c
+	p.print("Following Claude. Run /claude-follow again or press Esc to come back.", { color = AGENT_COLOR })
+end)
+
+commands.add_command("claude-watch", { "command-help.claude-watch" }, function(cmd)
+	local p = cmd.player_index and game.get_player(cmd.player_index)
+	if not p then return end
+	local zoom = tonumber(cmd.parameter or "")
+	local old = p.gui.screen[CAM_NAME]
+	if old then
+		if zoom and zoom > 0 and old.cam then old.cam.zoom = zoom else old.destroy() end
+		return
+	end
+	local c = agent_char()
+	if not c then return no_character(p) end
+	local frame = p.gui.screen.add { type = "frame", name = CAM_NAME, caption = "Claude", direction = "vertical" }
+	local cam = frame.add { type = "camera", name = "cam", position = c.position, surface_index = c.surface.index,
+		zoom = (zoom and zoom > 0) and zoom or 0.5 }
+	cam.style.width, cam.style.height = 360, 270
+	cam.entity = c
+	frame.location = { 20, 120 }
+end)

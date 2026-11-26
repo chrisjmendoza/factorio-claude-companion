@@ -1,4 +1,10 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.2.6
+Date: 2026-11-25
+  Features:
+    - /claude-follow: your view follows Claude's character. Run it again, or press Esc, to come back.
+    - /claude-watch: a small draggable camera window that follows Claude's character while you keep playing. Give a number to set its zoom.
+---------------------------------------------------------------------------------------------------
 Version: 0.2.5
 Date: 2026-11-25
   Bugfixes:
